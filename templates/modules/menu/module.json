@@ -1,0 +1,8 @@
+{
+  "name": "menu",
+  "version": "0.1.0",
+  "dependencies": [],
+  "migration": {
+    "name": "AddMenuModule"
+  }
+}
