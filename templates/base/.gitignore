@@ -12,6 +12,11 @@
 **/.env.*
 !**/.env.example
 
+# Local development secrets
+.secrets/
+**/appsettings.*.Local.json
+*.cookies.txt
+
 # Logs
 *.log
 

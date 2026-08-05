@@ -131,13 +131,33 @@ export async function installModulePackages(
   packages: readonly ModulePackage[],
   backupDirectory: string,
 ): Promise<ProjectFileBackup[]> {
-  const backups = new Map<string, ProjectFileBackup>();
+  const packagesByProject = new Map<
+    ModulePackageProject,
+    ModulePackage[]
+  >();
 
   for (const packageReference of packages) {
+    const projectPackages =
+      packagesByProject.get(packageReference.project) ?? [];
+
+    projectPackages.push(packageReference);
+
+    packagesByProject.set(
+      packageReference.project,
+      projectPackages,
+    );
+  }
+
+  const backups: ProjectFileBackup[] = [];
+
+  for (const [
+    project,
+    projectPackages,
+  ] of packagesByProject) {
     const projectFile = getProjectFile(
       projectRoot,
       projectManifest,
-      packageReference.project,
+      project,
     );
 
     let projectFileContent: string;
@@ -153,24 +173,26 @@ export async function installModulePackages(
       );
     }
 
-    if (!backups.has(projectFile)) {
-      const backupFile = path.join(
-        backupDirectory,
-        `${packageReference.project}.csproj`,
-      );
-
-      await copyFile(projectFile, backupFile);
-
-      backups.set(projectFile, {
-        projectFile,
-        backupFile,
-      });
-    }
-
-    const updatedContent = addPackageReference(
-      projectFileContent,
-      packageReference,
+    const backupFile = path.join(
+      backupDirectory,
+      `${project}.csproj`,
     );
+
+    await copyFile(projectFile, backupFile);
+
+    backups.push({
+      projectFile,
+      backupFile,
+    });
+
+    let updatedContent = projectFileContent;
+
+    for (const packageReference of projectPackages) {
+      updatedContent = addPackageReference(
+        updatedContent,
+        packageReference,
+      );
+    }
 
     await writeFile(
       projectFile,
@@ -179,7 +201,7 @@ export async function installModulePackages(
     );
   }
 
-  return [...backups.values()];
+  return backups;
 }
 
 export async function restoreProjectFileBackups(

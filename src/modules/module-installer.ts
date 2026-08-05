@@ -8,6 +8,7 @@ import {
   readdir,
   rm,
 } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ModuleManifest } from "./module-manifest.js";
 import type { ProjectManifest } from "../project/project-manifest.js";
 import { replaceTokensInDirectory } from "../infrastructure/token-replacer.js";
@@ -81,6 +82,42 @@ async function ensureDirectory(
   createdDirectories.push(directory);
 }
 
+async function removePathWithRetries(
+  targetPath: string,
+  options: {
+    recursive: boolean;
+    force: boolean;
+  },
+): Promise<void> {
+  const maximumAttempts = 10;
+
+  for (
+    let attempt = 1;
+    attempt <= maximumAttempts;
+    attempt += 1
+  ) {
+    try {
+      await rm(targetPath, {
+        recursive: options.recursive,
+        force: options.force,
+        maxRetries: 3,
+        retryDelay: 200,
+      });
+
+      return;
+    } catch (error) {
+      const isLastAttempt =
+        attempt === maximumAttempts;
+
+      if (isLastAttempt) {
+        throw error;
+      }
+
+      await delay(attempt * 250);
+    }
+  }
+}
+
 async function createDirectoryBackup(
   originalDirectory: string,
   backupDirectory: string,
@@ -98,17 +135,24 @@ async function createDirectoryBackup(
   };
 }
 
-async function restoreDirectoryBackup(backup: DirectoryBackup): Promise<void> {
-  await rm(backup.originalDirectory, {
-    recursive: true,
-    force: true,
-  });
+async function restoreDirectoryBackup(
+  backup: DirectoryBackup,
+): Promise<void> {
+  await removePathWithRetries(
+    backup.originalDirectory,
+    {
+      recursive: true,
+      force: true,
+    },
+  );
 
   if (backup.existed) {
     await cp(
       backup.backupDirectory,
       backup.originalDirectory,
-      { recursive: true },
+      {
+        recursive: true,
+      },
     );
   }
 }

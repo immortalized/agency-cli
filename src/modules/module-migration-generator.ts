@@ -25,6 +25,12 @@ export async function generateModuleMigration(
 ): Promise<void> {
   const namespace = projectManifest.project.namespace;
 
+  const solutionFile = path.join(
+    projectRoot,
+    "backend",
+    `${namespace}.slnx`,
+  );
+
   const infrastructureProject = path.join(
     projectRoot,
     "backend",
@@ -49,7 +55,17 @@ export async function generateModuleMigration(
     { cwd: projectRoot },
   );
 
-  console.log(`Generating EF Core migration '${migrationName}'...`);
+  console.log("Restoring .NET project dependencies...");
+
+  await runCommand(
+    "dotnet",
+    ["restore", solutionFile],
+    { cwd: projectRoot },
+  );
+
+  console.log(
+    `Generating EF Core migration '${migrationName}'...`,
+  );
 
   await runCommand(
     "dotnet",
