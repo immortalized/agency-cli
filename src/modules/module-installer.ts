@@ -17,6 +17,11 @@ import {
   generateModuleMigration,
   getMigrationsDirectory,
 } from "./module-migration-generator.js";
+import {
+  installModulePackages,
+  restoreProjectFileBackups,
+  type ProjectFileBackup,
+} from "./module-package-installer.js";
 
 interface DirectoryBackup {
   originalDirectory: string;
@@ -181,9 +186,15 @@ export async function installModule(
     "migrations-backup",
   );
 
+  const projectFileBackupDirectory = path.join(
+    transactionDirectory,
+    "project-files-backup",
+  );
+
   const createdFiles: string[] = [];
   const createdDirectories: string[] = [];
   let migrationBackup: DirectoryBackup | undefined;
+  let projectFileBackups: ProjectFileBackup[] = [];
 
   try {
     await cp(moduleFilesDirectory, stagedFilesDirectory, {
@@ -237,6 +248,22 @@ export async function installModule(
       createdFiles.push(destinationPath);
     }
 
+    if (
+      moduleManifest.packages &&
+      moduleManifest.packages.length > 0
+    ) {
+      await mkdir(projectFileBackupDirectory, {
+        recursive: true,
+      });
+
+      projectFileBackups = await installModulePackages(
+        projectRoot,
+        projectManifest,
+        moduleManifest.packages,
+        projectFileBackupDirectory,
+      );
+    }
+
     if (moduleManifest.migration) {
       const migrationsDirectory = getMigrationsDirectory(
         projectRoot,
@@ -269,6 +296,12 @@ export async function installModule(
       await restoreDirectoryBackup(migrationBackup);
     }
 
+    if (projectFileBackups.length > 0) {
+      await restoreProjectFileBackups(
+        projectFileBackups,
+      );
+    }
+
     await rollbackInstalledFiles(
       createdFiles,
       createdDirectories,
@@ -279,6 +312,8 @@ export async function installModule(
     await rm(transactionDirectory, {
       recursive: true,
       force: true,
+      maxRetries: 5,
+      retryDelay: 250,
     });
   }
 }

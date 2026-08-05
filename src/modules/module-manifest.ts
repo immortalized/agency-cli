@@ -1,10 +1,27 @@
+export const modulePackageProjects = [
+  "Api",
+  "Application",
+  "Domain",
+  "Infrastructure",
+] as const;
+
+export type ModulePackageProject =
+  (typeof modulePackageProjects)[number];
+
 export interface ModuleMigration {
   name: string;
+}
+
+export interface ModulePackage {
+  project: ModulePackageProject;
+  name: string;
+  version: string;
 }
 
 export interface ModuleManifest {
   name: string;
   version: string;
   dependencies: string[];
+  packages?: ModulePackage[];
   migration?: ModuleMigration;
 }
