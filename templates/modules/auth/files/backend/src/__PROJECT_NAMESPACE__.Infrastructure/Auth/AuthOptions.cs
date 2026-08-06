@@ -8,7 +8,4 @@ public sealed class AuthOptions
 
     public string RefreshCookieName { get; init; }
         = "__Host-refresh-token";
-
-    public string BootstrapSecret { get; init; }
-        = string.Empty;
 }

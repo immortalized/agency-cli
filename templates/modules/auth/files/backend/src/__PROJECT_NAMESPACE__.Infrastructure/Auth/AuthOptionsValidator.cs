@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.Extensions.Options;
 
 namespace __PROJECT_NAMESPACE__.Infrastructure.Auth;
@@ -10,6 +9,8 @@ public sealed class AuthOptionsValidator
         string? name,
         AuthOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         var errors = new List<string>();
 
         if (options.RefreshTokenLifetimeDays is < 1 or > 90)
@@ -30,20 +31,6 @@ public sealed class AuthOptionsValidator
         {
             errors.Add(
                 "Auth:RefreshCookieName must start with '__Host-'.");
-        }
-
-        if (string.IsNullOrWhiteSpace(
-                options.BootstrapSecret))
-        {
-            errors.Add(
-                "Auth:BootstrapSecret must be configured.");
-        }
-        else if (
-            Encoding.UTF8.GetByteCount(
-                options.BootstrapSecret) < 32)
-        {
-            errors.Add(
-                "Auth:BootstrapSecret must contain at least 32 UTF-8 bytes.");
         }
 
         return errors.Count == 0

@@ -6,23 +6,25 @@ public static class RsaKeyLoader
 {
     private const int MinimumKeySizeBits = 3_072;
 
-    public static RSA LoadPrivateKey(string privateKeyPem)
+    public static RSA LoadPrivateKeyFromFile(
+        string privateKeyFile)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(
-            privateKeyPem);
+        var pem = ReadPemFile(
+            privateKeyFile,
+            "JWT private key");
 
         var rsa = RSA.Create();
 
         try
         {
-            rsa.ImportFromPem(NormalizePem(privateKeyPem));
+            rsa.ImportFromPem(pem);
 
             EnsureSecureKeySize(rsa);
 
             if (!HasPrivateKey(rsa))
             {
                 throw new InvalidOperationException(
-                    "The configured JWT private key does not contain private key material.");
+                    "The configured JWT private key file does not contain private key material.");
             }
 
             return rsa;
@@ -34,16 +36,18 @@ public static class RsaKeyLoader
         }
     }
 
-    public static RSA LoadPublicKey(string publicKeyPem)
+    public static RSA LoadPublicKeyFromFile(
+        string publicKeyFile)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(
-            publicKeyPem);
+        var pem = ReadPemFile(
+            publicKeyFile,
+            "JWT public key");
 
         var rsa = RSA.Create();
 
         try
         {
-            rsa.ImportFromPem(NormalizePem(publicKeyPem));
+            rsa.ImportFromPem(pem);
 
             EnsureSecureKeySize(rsa);
 
@@ -56,7 +60,53 @@ public static class RsaKeyLoader
         }
     }
 
-    private static void EnsureSecureKeySize(RSA rsa)
+    private static string ReadPemFile(
+        string filePath,
+        string description)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(
+            filePath);
+
+        if (!Path.IsPathFullyQualified(filePath))
+        {
+            throw new InvalidOperationException(
+                $"{description} path must be absolute.");
+        }
+
+        if (!File.Exists(filePath))
+        {
+            throw new FileNotFoundException(
+                $"{description} file was not found.",
+                filePath);
+        }
+
+        string pem;
+
+        try
+        {
+            pem = File.ReadAllText(filePath);
+        }
+        catch (Exception exception)
+            when (
+                exception is IOException
+                or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                $"{description} file could not be read.",
+                exception);
+        }
+
+        if (string.IsNullOrWhiteSpace(pem))
+        {
+            throw new InvalidOperationException(
+                $"{description} file is empty.");
+        }
+
+        return pem.Trim();
+    }
+
+    private static void EnsureSecureKeySize(
+        RSA rsa)
     {
         if (rsa.KeySize < MinimumKeySizeBits)
         {
@@ -65,7 +115,8 @@ public static class RsaKeyLoader
         }
     }
 
-    private static bool HasPrivateKey(RSA rsa)
+    private static bool HasPrivateKey(
+        RSA rsa)
     {
         try
         {
@@ -82,13 +133,5 @@ public static class RsaKeyLoader
         {
             return false;
         }
-    }
-
-    private static string NormalizePem(string pem)
-    {
-        return pem
-            .Replace("\\r", string.Empty)
-            .Replace("\\n", "\n")
-            .Trim();
     }
 }

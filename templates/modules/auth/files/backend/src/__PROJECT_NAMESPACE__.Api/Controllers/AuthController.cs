@@ -19,90 +19,9 @@ public sealed class AuthController(
     IPasswordHasher passwordHasher,
     IAccessTokenService accessTokenService,
     IRefreshTokenService refreshTokenService,
-    BootstrapSecretValidator bootstrapSecretValidator,
     IOptions<AuthOptions> authOptions)
     : ControllerBase
 {
-    private const string BootstrapHeaderName =
-        "X-Bootstrap-Secret";
-
-    [AllowAnonymous]
-    [HttpPost("bootstrap")]
-    public async Task<ActionResult<AuthResponse>> Bootstrap(
-        BootstrapRequest request,
-        CancellationToken cancellationToken)
-    {
-        var suppliedSecret =
-            Request.Headers[BootstrapHeaderName]
-                .FirstOrDefault();
-
-        if (!bootstrapSecretValidator.IsValid(
-                suppliedSecret))
-        {
-            return Unauthorized();
-        }
-
-        // A tranzakció és a DB constraint együtt védi a
-        // párhuzamos bootstrap kéréseket.
-        await using var transaction =
-            await dbContext.Database.BeginTransactionAsync(
-                cancellationToken);
-
-        if (await dbContext
-                .Set<User>()
-                .AnyAsync(cancellationToken))
-        {
-            return Conflict(new ProblemDetails
-            {
-                Title = "Bootstrap is no longer available.",
-                Detail =
-                    "At least one user account already exists.",
-                Status = StatusCodes.Status409Conflict
-            });
-        }
-
-        var username = request.Username.Trim();
-        var normalizedUsername =
-            AuthNormalizer.NormalizeUsername(username);
-
-        var email = string.IsNullOrWhiteSpace(request.Email)
-            ? null
-            : request.Email.Trim();
-
-        var normalizedEmail =
-            AuthNormalizer.NormalizeEmail(email);
-
-        var passwordHash =
-            passwordHasher.Hash(request.Password);
-
-        var nowUtc = DateTimeOffset.UtcNow;
-
-        var user = new User(
-            Guid.NewGuid(),
-            username,
-            normalizedUsername,
-            passwordHash,
-            nowUtc,
-            email,
-            normalizedEmail);
-
-        dbContext.Set<User>().Add(user);
-
-        var response = CreateAuthenticatedSession(
-            user,
-            nowUtc);
-
-        await dbContext.SaveChangesAsync(
-            cancellationToken);
-
-        await transaction.CommitAsync(
-            cancellationToken);
-
-        return StatusCode(
-            StatusCodes.Status201Created,
-            response);
-    }
-
     [AllowAnonymous]
     [HttpPost("login")]
     public async Task<ActionResult<AuthResponse>> Login(
@@ -127,8 +46,8 @@ public sealed class AuthController(
                         == normalizedEmail,
                 cancellationToken);
 
-        // Ugyanazt a választ adjuk nem létező user,
-        // hibás jelszó és letiltott user esetén.
+        // The same response is returned for an unknown user,
+        // an incorrect password and a disabled account.
         if (user is null || !user.IsActive)
         {
             return InvalidCredentials();

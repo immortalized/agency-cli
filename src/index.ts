@@ -1,6 +1,7 @@
 import { addCommand } from './commands/add.js';
 import { runCreateCommand } from './commands/create.js';
 import { databaseCommand } from './commands/database.js';
+import { authCommand } from './commands/auth.js';
 
 async function main(){
     const [, , command, ...args] = process.argv;
@@ -21,6 +22,9 @@ async function main(){
         case "database":
             await databaseCommand(args);
             break;
+        case "auth:init":
+            await authCommand(args);
+            break;
         case "help":
         case undefined:
             printHelp();
@@ -34,11 +38,17 @@ function printHelp(): void{
     console.log(`
         Agency CLI
         Usage:
-            agency create <project-name>  Create a new project with the specified name.
+            agency create <project-name>  Create a new project.
             agency add <module-name>      Add a module to the current project.
+            agency auth:init              Generate authentication RSA keys.
+            agency database update        Apply pending database migrations.
             agency help                   Show this help message.
-        Example:
-            agency create "Example Project"`);
+
+        Examples:
+            agency create "Example Project"
+            agency add auth
+            agency auth:init
+            agency database update`);
 }
 
 main().catch((error: unknown) => {

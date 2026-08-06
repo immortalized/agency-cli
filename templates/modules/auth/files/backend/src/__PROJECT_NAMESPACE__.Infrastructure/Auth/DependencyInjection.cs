@@ -15,6 +15,13 @@ public static class DependencyInjection
         ArgumentNullException.ThrowIfNull(configuration);
 
         services
+            .AddOptions<AuthOptions>()
+            .Bind(
+                configuration.GetSection(
+                    AuthOptions.SectionName))
+            .ValidateOnStart();
+
+        services
             .AddOptions<JwtOptions>()
             .Bind(
                 configuration.GetSection(
@@ -28,8 +35,6 @@ public static class DependencyInjection
         services.AddSingleton<
             IValidateOptions<JwtOptions>,
             JwtOptionsValidator>();
-
-        services.AddSingleton<BootstrapSecretValidator>();
 
         services.AddSingleton<
             IPasswordHasher,

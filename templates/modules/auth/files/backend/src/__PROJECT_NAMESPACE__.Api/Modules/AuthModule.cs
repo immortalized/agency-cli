@@ -6,27 +6,40 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace __PROJECT_NAMESPACE__.Api.Modules;
 
-public sealed class AuthModule : IApplicationModule
+public sealed class AuthModule
+    : IApplicationModule,
+      IDisposable
 {
     private RSA? _publicKey;
+    private bool _disposed;
 
     public void AddServices(
         IServiceCollection services,
         IConfiguration configuration)
     {
-        ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(configuration);
+        ObjectDisposedException.ThrowIf(
+            _disposed,
+            this);
 
-        services.AddAuthInfrastructure(configuration);
+        ArgumentNullException.ThrowIfNull(
+            services);
+
+        ArgumentNullException.ThrowIfNull(
+            configuration);
+
+        services.AddAuthInfrastructure(
+            configuration);
 
         var jwtOptions = configuration
-            .GetRequiredSection(JwtOptions.SectionName)
+            .GetRequiredSection(
+                JwtOptions.SectionName)
             .Get<JwtOptions>()
             ?? throw new InvalidOperationException(
                 $"Configuration section '{JwtOptions.SectionName}' is missing.");
 
-        _publicKey = RsaKeyLoader.LoadPublicKey(
-            jwtOptions.PublicKeyPem);
+        _publicKey =
+            RsaKeyLoader.LoadPublicKeyFromFile(
+                jwtOptions.PublicKeyFile);
 
         var validationKey =
             new RsaSecurityKey(_publicKey)
@@ -36,7 +49,8 @@ public sealed class AuthModule : IApplicationModule
 
         services
             .AddAuthentication(
-                JwtBearerDefaults.AuthenticationScheme)
+                JwtBearerDefaults
+                    .AuthenticationScheme)
             .AddJwtBearer(options =>
             {
                 options.MapInboundClaims = false;
@@ -49,25 +63,37 @@ public sealed class AuthModule : IApplicationModule
                     new TokenValidationParameters
                     {
                         ValidateIssuer = true,
-                        ValidIssuer = jwtOptions.Issuer,
+
+                        ValidIssuer =
+                            jwtOptions.Issuer,
 
                         ValidateAudience = true,
-                        ValidAudience = jwtOptions.Audience,
 
-                        ValidateIssuerSigningKey = true,
-                        IssuerSigningKey = validationKey,
+                        ValidAudience =
+                            jwtOptions.Audience,
+
+                        ValidateIssuerSigningKey =
+                            true,
+
+                        IssuerSigningKey =
+                            validationKey,
 
                         RequireSignedTokens = true,
+
                         RequireExpirationTime = true,
+
                         ValidateLifetime = true,
 
-                        ClockSkew = TimeSpan.FromSeconds(30),
+                        ClockSkew =
+                            TimeSpan.FromSeconds(30),
 
                         NameClaimType =
-                            JwtRegisteredClaimNames.UniqueName,
+                            JwtRegisteredClaimNames
+                                .UniqueName,
 
                         AuthenticationType =
-                            JwtBearerDefaults.AuthenticationScheme
+                            JwtBearerDefaults
+                                .AuthenticationScheme
                     };
             });
 
@@ -77,9 +103,28 @@ public sealed class AuthModule : IApplicationModule
     public void ConfigureApplication(
         WebApplication app)
     {
+        ObjectDisposedException.ThrowIf(
+            _disposed,
+            this);
+
         ArgumentNullException.ThrowIfNull(app);
 
         app.UseAuthentication();
         app.UseAuthorization();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _publicKey?.Dispose();
+        _publicKey = null;
+
+        _disposed = true;
+
+        GC.SuppressFinalize(this);
     }
 }

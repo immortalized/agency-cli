@@ -14,8 +14,13 @@ public sealed class JwtAccessTokenService
 {
     private readonly JwtOptions _options;
     private readonly RSA _privateKey;
-    private readonly SigningCredentials _signingCredentials;
-    private readonly JwtSecurityTokenHandler _tokenHandler = new();
+    private readonly SigningCredentials
+        _signingCredentials;
+
+    private readonly JwtSecurityTokenHandler
+        _tokenHandler = new();
+
+    private bool _disposed;
 
     public JwtAccessTokenService(
         IOptions<JwtOptions> options)
@@ -24,8 +29,9 @@ public sealed class JwtAccessTokenService
 
         _options = options.Value;
 
-        _privateKey = RsaKeyLoader.LoadPrivateKey(
-            _options.PrivateKeyPem);
+        _privateKey =
+            RsaKeyLoader.LoadPrivateKeyFromFile(
+                _options.PrivateKeyFile);
 
         var securityKey =
             new RsaSecurityKey(_privateKey)
@@ -33,14 +39,19 @@ public sealed class JwtAccessTokenService
                 KeyId = _options.KeyId
             };
 
-        _signingCredentials = new SigningCredentials(
-            securityKey,
-            SecurityAlgorithms.RsaSha256);
+        _signingCredentials =
+            new SigningCredentials(
+                securityKey,
+                SecurityAlgorithms.RsaSha256);
     }
 
     public AccessTokenResult Create(
         AccessTokenSubject subject)
     {
+        ObjectDisposedException.ThrowIf(
+            _disposed,
+            this);
+
         ArgumentNullException.ThrowIfNull(subject);
 
         if (subject.UserId == Guid.Empty)
@@ -74,11 +85,14 @@ public sealed class JwtAccessTokenService
 
             new(
                 JwtRegisteredClaimNames.Iat,
-                nowUtc.ToUnixTimeSeconds().ToString(),
+                nowUtc
+                    .ToUnixTimeSeconds()
+                    .ToString(),
                 ClaimValueTypes.Integer64)
         };
 
-        if (!string.IsNullOrWhiteSpace(subject.Email))
+        if (!string.IsNullOrWhiteSpace(
+                subject.Email))
         {
             claims.Add(
                 new Claim(
@@ -91,18 +105,25 @@ public sealed class JwtAccessTokenService
             {
                 Issuer = _options.Issuer,
                 Audience = _options.Audience,
-                Subject = new ClaimsIdentity(claims),
-                NotBefore = nowUtc.UtcDateTime,
-                IssuedAt = nowUtc.UtcDateTime,
-                Expires = expiresAtUtc.UtcDateTime,
-                SigningCredentials = _signingCredentials
+                Subject =
+                    new ClaimsIdentity(claims),
+                NotBefore =
+                    nowUtc.UtcDateTime,
+                IssuedAt =
+                    nowUtc.UtcDateTime,
+                Expires =
+                    expiresAtUtc.UtcDateTime,
+                SigningCredentials =
+                    _signingCredentials
             };
 
         var securityToken =
-            _tokenHandler.CreateToken(descriptor);
+            _tokenHandler.CreateToken(
+                descriptor);
 
         var token =
-            _tokenHandler.WriteToken(securityToken);
+            _tokenHandler.WriteToken(
+                securityToken);
 
         return new AccessTokenResult(
             token,
@@ -111,6 +132,15 @@ public sealed class JwtAccessTokenService
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         _privateKey.Dispose();
+
+        _disposed = true;
+
+        GC.SuppressFinalize(this);
     }
 }
