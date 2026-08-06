@@ -1,0 +1,41 @@
+services:
+  api:
+    environment:
+      Auth__Jwt__Issuer: "__PROJECT_SLUG__"
+      Auth__Jwt__Audience: "__PROJECT_SLUG__-api"
+      Auth__Jwt__AccessTokenLifetimeMinutes: "10"
+      Auth__Jwt__PrivateKeyFile: "/run/secrets/auth_jwt_private_key"
+      Auth__Jwt__KeyRingFile: "/run/secrets/auth_jwt_key_ring"
+
+    secrets:
+      - auth_jwt_private_key
+      - auth_jwt_key_ring
+
+  auth-tool:
+    profiles:
+      - tools
+
+    build:
+      context: ./backend
+      dockerfile: Auth.Tool.Dockerfile
+
+    environment:
+      AUTH_KEY_DIRECTORY: "/workspace/.secrets"
+
+    volumes:
+      - ./.secrets:/workspace/.secrets
+
+    restart: "no"
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+secrets:
+  auth_jwt_private_key:
+    file: ./.secrets/auth-jwt-private-key.pem
+
+  auth_jwt_key_ring:
+    file: ./.secrets/auth-jwt-key-ring.json

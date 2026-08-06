@@ -14,6 +14,8 @@ public sealed class JwtAccessTokenService
 {
     private readonly JwtOptions _options;
     private readonly RSA _privateKey;
+    private readonly JwtKeyRing _keyRing;
+
     private readonly SigningCredentials
         _signingCredentials;
 
@@ -29,6 +31,9 @@ public sealed class JwtAccessTokenService
 
         _options = options.Value;
 
+        _keyRing = JwtKeyRing.Load(
+            _options.KeyRingFile);
+
         _privateKey =
             RsaKeyLoader.LoadPrivateKeyFromFile(
                 _options.PrivateKeyFile);
@@ -36,7 +41,7 @@ public sealed class JwtAccessTokenService
         var securityKey =
             new RsaSecurityKey(_privateKey)
             {
-                KeyId = _options.KeyId
+                KeyId = _keyRing.ActiveKeyId
             };
 
         _signingCredentials =
@@ -67,7 +72,8 @@ public sealed class JwtAccessTokenService
         var nowUtc = DateTimeOffset.UtcNow;
 
         var expiresAtUtc = nowUtc.AddMinutes(
-            _options.AccessTokenLifetimeMinutes);
+            _options
+                .AccessTokenLifetimeMinutes);
 
         var claims = new List<Claim>
         {
@@ -138,6 +144,7 @@ public sealed class JwtAccessTokenService
         }
 
         _privateKey.Dispose();
+        _keyRing.Dispose();
 
         _disposed = true;
 

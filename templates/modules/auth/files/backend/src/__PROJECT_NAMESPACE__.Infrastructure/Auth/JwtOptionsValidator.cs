@@ -41,20 +41,15 @@ public sealed class JwtOptionsValidator
             errors);
 
         ValidateFile(
-            options.PublicKeyFile,
-            "Auth:Jwt:PublicKeyFile",
+            options.KeyRingFile,
+            "Auth:Jwt:KeyRingFile",
             errors);
 
-        if (string.IsNullOrWhiteSpace(
-                options.KeyId))
+        if (errors.Count == 0)
         {
-            errors.Add(
-                "Auth:Jwt:KeyId must be configured.");
-        }
-        else if (options.KeyId.Length > 128)
-        {
-            errors.Add(
-                "Auth:Jwt:KeyId cannot exceed 128 characters.");
+            ValidateKeyMaterial(
+                options,
+                errors);
         }
 
         return errors.Count == 0
@@ -87,6 +82,70 @@ public sealed class JwtOptionsValidator
         {
             errors.Add(
                 $"{configurationName} does not exist: '{filePath}'.");
+        }
+    }
+
+    private static void ValidateKeyMaterial(
+        JwtOptions options,
+        ICollection<string> errors)
+    {
+        try
+        {
+            using var keyRing =
+                JwtKeyRing.Load(
+                    options.KeyRingFile);
+
+            using var privateKey =
+                RsaKeyLoader
+                    .LoadPrivateKeyFromFile(
+                        options.PrivateKeyFile);
+
+            var activePublicKey =
+                keyRing.ValidationKeys
+                    .OfType<
+                        Microsoft.IdentityModel.Tokens
+                            .RsaSecurityKey>()
+                    .Single(key =>
+                        key.KeyId ==
+                        keyRing.ActiveKeyId);
+
+            var privatePublicParameters =
+                privateKey.ExportParameters(
+                    includePrivateParameters:
+                        false);
+
+            var activePublicParameters =
+                activePublicKey.Rsa!
+                    .ExportParameters(
+                        includePrivateParameters:
+                            false);
+
+            if (
+                privatePublicParameters.Modulus
+                    is null
+                || activePublicParameters.Modulus
+                    is null
+                || privatePublicParameters.Exponent
+                    is null
+                || activePublicParameters.Exponent
+                    is null
+                || !privatePublicParameters.Modulus
+                    .AsSpan()
+                    .SequenceEqual(
+                        activePublicParameters.Modulus)
+                || !privatePublicParameters.Exponent
+                    .AsSpan()
+                    .SequenceEqual(
+                        activePublicParameters.Exponent))
+            {
+                errors.Add(
+                    "JWT private key does not match the active public key.");
+            }
+        }
+        catch (Exception exception)
+        {
+            errors.Add(
+                $"JWT key material is invalid: {exception.Message}");
         }
     }
 }

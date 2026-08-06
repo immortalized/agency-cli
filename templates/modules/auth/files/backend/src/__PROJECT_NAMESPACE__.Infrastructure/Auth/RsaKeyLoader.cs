@@ -4,12 +4,13 @@ namespace __PROJECT_NAMESPACE__.Infrastructure.Auth;
 
 public static class RsaKeyLoader
 {
-    private const int MinimumKeySizeBits = 3_072;
+    private const int MinimumKeySizeBits =
+        3_072;
 
     public static RSA LoadPrivateKeyFromFile(
         string privateKeyFile)
     {
-        var pem = ReadPemFile(
+        var pem = ReadRequiredFile(
             privateKeyFile,
             "JWT private key");
 
@@ -36,18 +37,17 @@ public static class RsaKeyLoader
         }
     }
 
-    public static RSA LoadPublicKeyFromFile(
-        string publicKeyFile)
+    public static RSA LoadPublicKeyFromPem(
+        string publicKeyPem)
     {
-        var pem = ReadPemFile(
-            publicKeyFile,
-            "JWT public key");
+        ArgumentException.ThrowIfNullOrWhiteSpace(
+            publicKeyPem);
 
         var rsa = RSA.Create();
 
         try
         {
-            rsa.ImportFromPem(pem);
+            rsa.ImportFromPem(publicKeyPem);
 
             EnsureSecureKeySize(rsa);
 
@@ -60,7 +60,7 @@ public static class RsaKeyLoader
         }
     }
 
-    private static string ReadPemFile(
+    private static string ReadRequiredFile(
         string filePath,
         string description)
     {
@@ -80,11 +80,12 @@ public static class RsaKeyLoader
                 filePath);
         }
 
-        string pem;
+        string content;
 
         try
         {
-            pem = File.ReadAllText(filePath);
+            content =
+                File.ReadAllText(filePath);
         }
         catch (Exception exception)
             when (
@@ -96,13 +97,16 @@ public static class RsaKeyLoader
                 exception);
         }
 
-        if (string.IsNullOrWhiteSpace(pem))
+        content = content.Trim();
+
+        if (string.IsNullOrWhiteSpace(
+                content))
         {
             throw new InvalidOperationException(
                 $"{description} file is empty.");
         }
 
-        return pem.Trim();
+        return content;
     }
 
     private static void EnsureSecureKeySize(
