@@ -76,9 +76,10 @@ public sealed class AuthController(
 
         user.RecordSuccessfulLogin(nowUtc);
 
-        var response = CreateAuthenticatedSession(
+        var response = await CreateAuthenticatedSessionAsync(
             user,
-            nowUtc);
+            nowUtc,
+            cancellationToken);
 
         await dbContext.SaveChangesAsync(
             cancellationToken);
@@ -86,16 +87,19 @@ public sealed class AuthController(
         return Ok(response);
     }
 
-    private AuthResponse CreateAuthenticatedSession(
+    private async Task<AuthResponse>
+        CreateAuthenticatedSessionAsync(
         User user,
-        DateTimeOffset nowUtc)
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
     {
         var accessToken =
-            accessTokenService.Create(
+            await accessTokenService.CreateAsync(
                 new AccessTokenSubject(
                     user.Id,
                     user.Username,
-                    user.Email));
+                    user.Email),
+                cancellationToken);
 
         var refreshToken =
             refreshTokenService.Create();

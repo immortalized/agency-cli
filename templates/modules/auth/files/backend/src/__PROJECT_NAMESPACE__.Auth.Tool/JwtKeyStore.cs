@@ -5,11 +5,7 @@ namespace __PROJECT_NAMESPACE__.Auth.Tool;
 
 public static class JwtKeyStore
 {
-    private const int KeySizeBits = 3_072;
-    private const int KeyRingVersion = 1;
-
-    private const string PrivateKeyFileName =
-        "auth-jwt-private-key.pem";
+    private const int KeyRingVersion = 2;
 
     private const string KeyRingFileName =
         "auth-jwt-key-ring.json";
@@ -22,158 +18,266 @@ public static class JwtKeyStore
         {
             PropertyNamingPolicy =
                 JsonNamingPolicy.CamelCase,
-
             WriteIndented = true
         };
 
     public static async Task<JwtKeyOperationResult>
         InitializeAsync(
             string keyDirectory,
-            CancellationToken cancellationToken =
-                default)
+            CancellationToken cancellationToken = default)
     {
-        var paths = PreparePaths(keyDirectory);
+        var options = OpenBaoToolOptions
+            .FromEnvironment();
+
+        var paths = PreparePaths(
+            keyDirectory,
+            options.RuntimeTokenFile);
 
         using var operationLock =
             AcquireOperationLock(paths.LockFile);
 
-        EnsureFileDoesNotExist(
-            paths.PrivateKeyFile);
+        using var httpClient = CreateHttpClient(options);
+        var client = new OpenBaoTransitAdminClient(
+            httpClient,
+            options);
 
-        EnsureFileDoesNotExist(
-            paths.KeyRingFile);
+        await client.EnsureTransitEnabledAsync(
+            cancellationToken);
 
-        using var rsa = RSA.Create(KeySizeBits);
+        var key = await client.ReadKeyAsync(
+            cancellationToken);
 
-        var keyId = GenerateKeyId();
-        var createdAtUtc = DateTimeOffset.UtcNow;
-
-        var privateKeyPem =
-            rsa.ExportPkcs8PrivateKeyPem();
-
-        var publicKeyPem =
-            rsa.ExportSubjectPublicKeyInfoPem();
-
-        var keyRing = new JwtKeyRingDocument
-        {
-            Version = KeyRingVersion,
-            ActiveKeyId = keyId,
-            Keys =
-            [
-                new JwtKeyRingEntry
-                {
-                    KeyId = keyId,
-                    PublicKeyPem = publicKeyPem,
-                    CreatedAtUtc = createdAtUtc,
-                    RetiredAtUtc = null
-                }
-            ]
-        };
-
-        await WriteInitialFilesAsync(
+        EnsureInitializationCanProceed(
             paths,
-            privateKeyPem,
+            key);
+
+        if (key is null)
+        {
+            await client.CreateKeyAsync(
+                cancellationToken);
+
+            key = await client.ReadKeyAsync(
+                cancellationToken)
+                ?? throw new InvalidOperationException(
+                    "OpenBao did not return the newly created Transit key.");
+        }
+
+        await client.WriteRuntimePolicyAsync(
+            cancellationToken);
+
+        var keyRing = CreateKeyRing(
+            options.KeyName,
+            key);
+
+        ValidateKeyRing(keyRing);
+
+        var runtimeToken =
+            await client.CreateRuntimeTokenAsync(
+                cancellationToken);
+
+        await WriteSensitiveFileAsync(
+            paths.RuntimeTokenFile,
+            $"{runtimeToken}{Environment.NewLine}",
+            cancellationToken);
+
+        await WriteKeyRingAsync(
+            paths.KeyRingFile,
             keyRing,
             cancellationToken);
 
-        ValidateKeyStore(
-            paths.PrivateKeyFile,
+        return new JwtKeyOperationResult(
+            keyRing.ActiveKeyId,
+            keyRing.Keys.Count);
+    }
+
+    private static void EnsureInitializationCanProceed(
+        KeyStorePaths paths,
+        OpenBaoTransitKey? key)
+    {
+        if (key is null)
+        {
+            // Development-mode OpenBao loses its in-memory
+            // key when its container is recreated. Existing
+            // local artifacts are stale in that case and may
+            // be safely replaced by this recovery bootstrap.
+            return;
+        }
+
+        var keyRingExists = File.Exists(
             paths.KeyRingFile);
 
-        return new JwtKeyOperationResult(
-            keyId,
-            keyRing.Keys.Count);
+        var runtimeTokenExists = File.Exists(
+            paths.RuntimeTokenFile);
+
+        if (keyRingExists && runtimeTokenExists)
+        {
+            throw new InvalidOperationException(
+                "JWT signing is already initialized. Use 'keys rotate' to create a new signing-key version.");
+        }
+
+        if (keyRingExists || runtimeTokenExists)
+        {
+            throw new InvalidOperationException(
+                "JWT signing initialization is incomplete: the local key ring and runtime token must either both exist or both be absent.");
+        }
     }
 
     public static async Task<JwtKeyOperationResult>
         RotateAsync(
             string keyDirectory,
-            CancellationToken cancellationToken =
-                default)
+            CancellationToken cancellationToken = default)
     {
-        var paths = PreparePaths(keyDirectory);
+        var options = OpenBaoToolOptions
+            .FromEnvironment();
+
+        var paths = PreparePaths(
+            keyDirectory,
+            options.RuntimeTokenFile);
 
         using var operationLock =
             AcquireOperationLock(paths.LockFile);
 
-        ValidateKeyStore(
-            paths.PrivateKeyFile,
-            paths.KeyRingFile);
+        if (!File.Exists(paths.KeyRingFile))
+        {
+            throw new InvalidOperationException(
+                "JWT signing has not been initialized. Run 'keys init' first.");
+        }
 
-        var existingKeyRing =
-            await ReadKeyRingAsync(
-                paths.KeyRingFile,
-                cancellationToken);
+        using var httpClient = CreateHttpClient(options);
+        var client = new OpenBaoTransitAdminClient(
+            httpClient,
+            options);
 
-        using var rsa = RSA.Create(KeySizeBits);
+        var currentKey = await client.ReadKeyAsync(
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The OpenBao Transit signing key does not exist. Run 'keys init' to bootstrap the development instance.");
 
-        var nowUtc = DateTimeOffset.UtcNow;
-        var newKeyId = GenerateKeyId();
+        await client.RotateKeyAsync(
+            cancellationToken);
 
-        var newPrivateKeyPem =
-            rsa.ExportPkcs8PrivateKeyPem();
+        var rotatedKey = await client.ReadKeyAsync(
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "OpenBao did not return the rotated Transit key.");
 
-        var newPublicKeyPem =
-            rsa.ExportSubjectPublicKeyInfoPem();
+        if (rotatedKey.LatestVersion
+            != currentKey.LatestVersion + 1)
+        {
+            throw new InvalidOperationException(
+                "OpenBao Transit returned an unexpected key version after rotation.");
+        }
 
-        var updatedEntries = existingKeyRing.Keys
-            .Select(entry =>
-                entry.KeyId ==
-                existingKeyRing.ActiveKeyId
-                    ? new JwtKeyRingEntry
-                    {
-                        KeyId = entry.KeyId,
-                        PublicKeyPem =
-                            entry.PublicKeyPem,
-                        CreatedAtUtc =
-                            entry.CreatedAtUtc,
-                        RetiredAtUtc =
-                            entry.RetiredAtUtc
-                            ?? nowUtc
-                    }
-                    : entry)
-            .Append(
+        var keyRing = CreateKeyRing(
+            options.KeyName,
+            rotatedKey);
+
+        ValidateKeyRing(keyRing);
+
+        await WriteKeyRingAsync(
+            paths.KeyRingFile,
+            keyRing,
+            cancellationToken);
+
+        return new JwtKeyOperationResult(
+            keyRing.ActiveKeyId,
+            keyRing.Keys.Count);
+    }
+
+    private static HttpClient CreateHttpClient(
+        OpenBaoToolOptions options)
+    {
+        return new HttpClient
+        {
+            BaseAddress = options.Address,
+            Timeout = options.RequestTimeout
+        };
+    }
+
+    private static JwtKeyRingDocument CreateKeyRing(
+        string keyName,
+        OpenBaoTransitKey key)
+    {
+        var versions = key.Versions
+            .OrderBy(version => version.Version)
+            .ToArray();
+
+        var entries = versions
+            .Select((version, index) =>
                 new JwtKeyRingEntry
                 {
-                    KeyId = newKeyId,
+                    KeyId = CreateKeyId(
+                        keyName,
+                        version.Version),
+                    TransitKeyVersion =
+                        version.Version,
                     PublicKeyPem =
-                        newPublicKeyPem,
-                    CreatedAtUtc = nowUtc,
-                    RetiredAtUtc = null
+                        version.PublicKeyPem,
+                    CreatedAtUtc =
+                        version.CreatedAtUtc,
+                    RetiredAtUtc =
+                        index < versions.Length - 1
+                            ? versions[index + 1]
+                                .CreatedAtUtc
+                            : null
                 })
             .ToArray();
 
-        var updatedKeyRing =
-            new JwtKeyRingDocument
+        return new JwtKeyRingDocument
+        {
+            Version = KeyRingVersion,
+            ActiveKeyId = CreateKeyId(
+                keyName,
+                key.LatestVersion),
+            Keys = entries
+        };
+    }
+
+    private static string CreateKeyId(
+        string keyName,
+        int version) =>
+        $"{keyName}-v{version}";
+
+    private static void ValidateKeyRing(
+        JwtKeyRingDocument keyRing)
+    {
+        if (keyRing.Version != KeyRingVersion
+            || keyRing.Keys.Count == 0
+            || keyRing.Keys.All(entry =>
+                entry.KeyId != keyRing.ActiveKeyId))
+        {
+            throw new InvalidOperationException(
+                "The generated JWT public key ring is invalid.");
+        }
+
+        foreach (var entry in keyRing.Keys)
+        {
+            if (entry.TransitKeyVersion < 1)
             {
-                Version = KeyRingVersion,
-                ActiveKeyId = newKeyId,
-                Keys = updatedEntries
-            };
+                throw new InvalidOperationException(
+                    "The generated JWT public key ring contains an invalid Transit key version.");
+            }
 
-        await ReplaceFilesWithRollbackAsync(
-            paths,
-            newPrivateKeyPem,
-            updatedKeyRing,
-            cancellationToken);
+            using var rsa = RSA.Create();
+            rsa.ImportFromPem(entry.PublicKeyPem);
 
-        ValidateKeyStore(
-            paths.PrivateKeyFile,
-            paths.KeyRingFile);
-
-        return new JwtKeyOperationResult(
-            newKeyId,
-            updatedEntries.Length);
+            if (rsa.KeySize != 3_072)
+            {
+                throw new CryptographicException(
+                    "OpenBao returned a JWT public key that is not RSA-3072.");
+            }
+        }
     }
 
     private static KeyStorePaths PreparePaths(
-        string keyDirectory)
+        string keyDirectory,
+        string runtimeTokenFile)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(
             keyDirectory);
 
-        var absoluteDirectory =
-            Path.GetFullPath(keyDirectory);
+        var absoluteDirectory = Path.GetFullPath(
+            keyDirectory);
 
         Directory.CreateDirectory(
             absoluteDirectory);
@@ -181,15 +285,24 @@ public static class JwtKeyStore
         RestrictDirectoryPermissions(
             absoluteDirectory);
 
+        var absoluteTokenFile = Path.GetFullPath(
+            runtimeTokenFile);
+
+        if (!string.Equals(
+                Path.GetDirectoryName(
+                    absoluteTokenFile),
+                absoluteDirectory,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "OPENBAO_RUNTIME_TOKEN_FILE must be inside AUTH_KEY_DIRECTORY.");
+        }
+
         return new KeyStorePaths(
             Path.Combine(
                 absoluteDirectory,
-                PrivateKeyFileName),
-
-            Path.Combine(
-                absoluteDirectory,
                 KeyRingFileName),
-
+            absoluteTokenFile,
             Path.Combine(
                 absoluteDirectory,
                 LockFileName));
@@ -200,16 +313,6 @@ public static class JwtKeyStore
     {
         try
         {
-            /*
-             * The lock file is intentionally allowed to
-             * remain on disk.
-             *
-             * Mutual exclusion comes from FileShare.None,
-             * not from the existence of the file.
-             *
-             * If the process or container stops, the OS
-             * releases the file handle automatically.
-             */
             return new FileStream(
                 lockFile,
                 FileMode.OpenOrCreate,
@@ -224,179 +327,9 @@ public static class JwtKeyStore
                 "Another JWT key operation is currently running.",
                 exception);
         }
-        catch (UnauthorizedAccessException exception)
-        {
-            throw new InvalidOperationException(
-                "The JWT key operation lock file could not be opened.",
-                exception);
-        }
     }
 
-    private static void EnsureFileDoesNotExist(
-        string filePath)
-    {
-        if (!File.Exists(filePath))
-        {
-            return;
-        }
-
-        throw new InvalidOperationException(
-            $"Authentication key initialization cannot continue because '{Path.GetFileName(filePath)}' already exists.");
-    }
-
-    private static async Task WriteInitialFilesAsync(
-        KeyStorePaths paths,
-        string privateKeyPem,
-        JwtKeyRingDocument keyRing,
-        CancellationToken cancellationToken)
-    {
-        var createdFiles = new List<string>();
-
-        try
-        {
-            await WriteNewTextFileAsync(
-                paths.PrivateKeyFile,
-                privateKeyPem,
-                cancellationToken);
-
-            createdFiles.Add(
-                paths.PrivateKeyFile);
-
-            RestrictPrivateFilePermissions(
-                paths.PrivateKeyFile);
-
-            await WriteNewKeyRingAsync(
-                paths.KeyRingFile,
-                keyRing,
-                cancellationToken);
-
-            createdFiles.Add(
-                paths.KeyRingFile);
-
-            RestrictPrivateFilePermissions(
-                paths.KeyRingFile);
-        }
-        catch
-        {
-            DeleteFiles(createdFiles);
-            throw;
-        }
-    }
-
-    private static async Task
-        ReplaceFilesWithRollbackAsync(
-            KeyStorePaths paths,
-            string privateKeyPem,
-            JwtKeyRingDocument keyRing,
-            CancellationToken cancellationToken)
-    {
-        var operationId =
-            Guid.NewGuid().ToString("N");
-
-        var temporaryPrivateKeyFile =
-            $"{paths.PrivateKeyFile}.{operationId}.tmp";
-
-        var temporaryKeyRingFile =
-            $"{paths.KeyRingFile}.{operationId}.tmp";
-
-        var backupPrivateKeyFile =
-            $"{paths.PrivateKeyFile}.{operationId}.bak";
-
-        var backupKeyRingFile =
-            $"{paths.KeyRingFile}.{operationId}.bak";
-
-        var privateKeyReplaced = false;
-        var keyRingReplaced = false;
-
-        try
-        {
-            await WriteNewTextFileAsync(
-                temporaryPrivateKeyFile,
-                privateKeyPem,
-                cancellationToken);
-
-            RestrictPrivateFilePermissions(
-                temporaryPrivateKeyFile);
-
-            await WriteNewKeyRingAsync(
-                temporaryKeyRingFile,
-                keyRing,
-                cancellationToken);
-
-            RestrictPrivateFilePermissions(
-                temporaryKeyRingFile);
-
-            ValidateKeyStore(
-                temporaryPrivateKeyFile,
-                temporaryKeyRingFile);
-
-            File.Copy(
-                paths.PrivateKeyFile,
-                backupPrivateKeyFile,
-                overwrite: false);
-
-            File.Copy(
-                paths.KeyRingFile,
-                backupKeyRingFile,
-                overwrite: false);
-
-            RestrictPrivateFilePermissions(
-                backupPrivateKeyFile);
-
-            RestrictPrivateFilePermissions(
-                backupKeyRingFile);
-
-            File.Move(
-                temporaryPrivateKeyFile,
-                paths.PrivateKeyFile,
-                overwrite: true);
-
-            privateKeyReplaced = true;
-
-            File.Move(
-                temporaryKeyRingFile,
-                paths.KeyRingFile,
-                overwrite: true);
-
-            keyRingReplaced = true;
-
-            RestrictPrivateFilePermissions(
-                paths.PrivateKeyFile);
-
-            RestrictPrivateFilePermissions(
-                paths.KeyRingFile);
-        }
-        catch
-        {
-            if (privateKeyReplaced)
-            {
-                RestoreBackup(
-                    backupPrivateKeyFile,
-                    paths.PrivateKeyFile);
-            }
-
-            if (keyRingReplaced)
-            {
-                RestoreBackup(
-                    backupKeyRingFile,
-                    paths.KeyRingFile);
-            }
-
-            throw;
-        }
-        finally
-        {
-            DeleteFiles(
-            [
-                temporaryPrivateKeyFile,
-                temporaryKeyRingFile,
-                backupPrivateKeyFile,
-                backupKeyRingFile
-            ]);
-        }
-    }
-
-    private static async Task WriteNewKeyRingAsync(
+    private static async Task WriteKeyRingAsync(
         string filePath,
         JwtKeyRingDocument keyRing,
         CancellationToken cancellationToken)
@@ -405,360 +338,70 @@ public static class JwtKeyStore
             keyRing,
             JsonOptions);
 
-        await WriteNewTextFileAsync(
+        await WriteSensitiveFileAsync(
             filePath,
             $"{json}{Environment.NewLine}",
             cancellationToken);
     }
 
-    private static async Task
-        WriteNewTextFileAsync(
-            string filePath,
-            string content,
-            CancellationToken cancellationToken)
+    private static async Task WriteSensitiveFileAsync(
+        string filePath,
+        string content,
+        CancellationToken cancellationToken)
     {
-        await using var stream =
-            new FileStream(
-                filePath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 4_096,
-                options:
-                    FileOptions.Asynchronous
-                    | FileOptions.WriteThrough);
+        var temporaryFile =
+            $"{filePath}.{Guid.NewGuid():N}.tmp";
 
-        await using var writer =
-            new StreamWriter(
-                stream,
-                leaveOpen: true);
-
-        await writer.WriteAsync(
-            content.AsMemory(),
-            cancellationToken);
-
-        await writer.FlushAsync(
-            cancellationToken);
-
-        stream.Flush(
-            flushToDisk: true);
-    }
-
-    private static async Task<JwtKeyRingDocument>
-        ReadKeyRingAsync(
-            string keyRingFile,
-            CancellationToken cancellationToken)
-    {
-        await using var stream =
-            new FileStream(
-                keyRingFile,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read);
-
-        var keyRing =
-            await JsonSerializer.DeserializeAsync<
-                JwtKeyRingDocument>(
-                stream,
-                JsonOptions,
+        try
+        {
+            await File.WriteAllTextAsync(
+                temporaryFile,
+                content,
                 cancellationToken);
 
-        return keyRing
-            ?? throw new InvalidOperationException(
-                "JWT key ring contains invalid JSON.");
-    }
+            RestrictFilePermissions(
+                temporaryFile);
 
-    private static void ValidateKeyStore(
-        string privateKeyFile,
-        string keyRingFile)
-    {
-        if (!File.Exists(privateKeyFile))
-        {
-            throw new FileNotFoundException(
-                "JWT private key file was not found.",
-                privateKeyFile);
-        }
-
-        if (!File.Exists(keyRingFile))
-        {
-            throw new FileNotFoundException(
-                "JWT key ring file was not found.",
-                keyRingFile);
-        }
-
-        var privateKeyPem =
-            File.ReadAllText(privateKeyFile);
-
-        var keyRingJson =
-            File.ReadAllText(keyRingFile);
-
-        JwtKeyRingDocument keyRing;
-
-        try
-        {
-            keyRing =
-                JsonSerializer.Deserialize<
-                    JwtKeyRingDocument>(
-                    keyRingJson,
-                    JsonOptions)
-                ?? throw new InvalidOperationException(
-                    "JWT key ring contains invalid JSON.");
-        }
-        catch (JsonException exception)
-        {
-            throw new InvalidOperationException(
-                "JWT key ring contains invalid JSON.",
-                exception);
-        }
-
-        if (keyRing.Version != KeyRingVersion)
-        {
-            throw new InvalidOperationException(
-                $"Unsupported JWT key ring version '{keyRing.Version}'.");
-        }
-
-        if (string.IsNullOrWhiteSpace(
-                keyRing.ActiveKeyId))
-        {
-            throw new InvalidOperationException(
-                "JWT key ring has no active key id.");
-        }
-
-        if (keyRing.Keys.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "JWT key ring does not contain any validation keys.");
-        }
-
-        if (
-            keyRing.Keys
-                .Select(entry => entry.KeyId)
-                .Distinct(StringComparer.Ordinal)
-                .Count()
-            != keyRing.Keys.Count)
-        {
-            throw new InvalidOperationException(
-                "JWT key ring contains duplicate key ids.");
-        }
-
-        foreach (var entry in keyRing.Keys)
-        {
-            ValidateKeyRingEntry(entry);
-        }
-
-        var activeEntry = keyRing.Keys
-            .SingleOrDefault(entry =>
-                entry.KeyId ==
-                keyRing.ActiveKeyId)
-            ?? throw new InvalidOperationException(
-                "JWT key ring active key does not exist.");
-
-        if (activeEntry.RetiredAtUtc is not null)
-        {
-            throw new InvalidOperationException(
-                "JWT key ring active key cannot be retired.");
-        }
-
-        using var privateRsa = RSA.Create();
-        privateRsa.ImportFromPem(privateKeyPem);
-
-        using var publicRsa = RSA.Create();
-        publicRsa.ImportFromPem(
-            activeEntry.PublicKeyPem);
-
-        if (
-            privateRsa.KeySize != KeySizeBits
-            || publicRsa.KeySize != KeySizeBits)
-        {
-            throw new CryptographicException(
-                $"JWT RSA keys must be {KeySizeBits} bits.");
-        }
-
-        EnsurePrivateKeyMaterial(privateRsa);
-
-        var privatePublic =
-            privateRsa.ExportParameters(
-                includePrivateParameters: false);
-
-        var publicParameters =
-            publicRsa.ExportParameters(
-                includePrivateParameters: false);
-
-        if (
-            privatePublic.Modulus is null
-            || publicParameters.Modulus is null
-            || privatePublic.Exponent is null
-            || publicParameters.Exponent is null
-            || !privatePublic.Modulus
-                .AsSpan()
-                .SequenceEqual(
-                    publicParameters.Modulus)
-            || !privatePublic.Exponent
-                .AsSpan()
-                .SequenceEqual(
-                    publicParameters.Exponent))
-        {
-            throw new CryptographicException(
-                "JWT private key does not match the active public key.");
-        }
-    }
-
-    private static void ValidateKeyRingEntry(
-        JwtKeyRingEntry entry)
-    {
-        if (string.IsNullOrWhiteSpace(
-                entry.KeyId))
-        {
-            throw new InvalidOperationException(
-                "JWT key ring contains an empty key id.");
-        }
-
-        if (entry.KeyId.Length > 128)
-        {
-            throw new InvalidOperationException(
-                $"JWT key id '{entry.KeyId}' exceeds 128 characters.");
-        }
-
-        if (string.IsNullOrWhiteSpace(
-                entry.PublicKeyPem))
-        {
-            throw new InvalidOperationException(
-                $"JWT key '{entry.KeyId}' has no public key.");
-        }
-
-        if (
-            entry.RetiredAtUtc is not null
-            && entry.RetiredAtUtc
-                < entry.CreatedAtUtc)
-        {
-            throw new InvalidOperationException(
-                $"JWT key '{entry.KeyId}' was retired before it was created.");
-        }
-
-        using var rsa = RSA.Create();
-        rsa.ImportFromPem(entry.PublicKeyPem);
-
-        if (rsa.KeySize != KeySizeBits)
-        {
-            throw new CryptographicException(
-                $"JWT key '{entry.KeyId}' must be {KeySizeBits} bits.");
-        }
-    }
-
-    private static void EnsurePrivateKeyMaterial(
-        RSA rsa)
-    {
-        try
-        {
-            var parameters =
-                rsa.ExportParameters(
-                    includePrivateParameters: true);
-
-            if (parameters.D is not
-                {
-                    Length: > 0
-                })
-            {
-                throw new CryptographicException(
-                    "JWT private key does not contain private key material.");
-            }
-        }
-        catch (CryptographicException)
-        {
-            throw;
-        }
-    }
-
-    private static void RestoreBackup(
-        string backupFile,
-        string destinationFile)
-    {
-        if (!File.Exists(backupFile))
-        {
-            return;
-        }
-
-        try
-        {
-            File.Copy(
-                backupFile,
-                destinationFile,
+            File.Move(
+                temporaryFile,
+                filePath,
                 overwrite: true);
 
-            RestrictPrivateFilePermissions(
-                destinationFile);
+            RestrictFilePermissions(filePath);
         }
-        catch
+        finally
         {
-            // Preserve the original rotation error.
+            File.Delete(temporaryFile);
         }
     }
 
-    private static void DeleteFiles(
-        IEnumerable<string> filePaths)
+    private static void RestrictDirectoryPermissions(
+        string directoryPath)
     {
-        foreach (var filePath in filePaths)
+        if (!OperatingSystem.IsWindows())
         {
-            try
-            {
-                File.Delete(filePath);
-            }
-            catch
-            {
-                // Preserve the original operation error.
-            }
+            File.SetUnixFileMode(
+                directoryPath,
+                UnixFileMode.UserRead
+                | UnixFileMode.UserWrite
+                | UnixFileMode.UserExecute);
         }
     }
 
-    private static string GenerateKeyId()
+    private static void RestrictFilePermissions(
+        string filePath)
     {
-        var timestamp =
-            DateTimeOffset.UtcNow.ToString(
-                "yyyyMMddHHmmss");
-
-        var randomSuffix =
-            Convert.ToHexString(
-                    RandomNumberGenerator
-                        .GetBytes(8))
-                .ToLowerInvariant();
-
-        return
-            $"key-{timestamp}-{randomSuffix}";
-    }
-
-    private static void
-        RestrictDirectoryPermissions(
-            string directoryPath)
-    {
-        if (OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows())
         {
-            return;
+            File.SetUnixFileMode(
+                filePath,
+                UnixFileMode.UserRead
+                | UnixFileMode.UserWrite);
         }
-
-        File.SetUnixFileMode(
-            directoryPath,
-            UnixFileMode.UserRead
-            | UnixFileMode.UserWrite
-            | UnixFileMode.UserExecute);
-    }
-
-    private static void
-        RestrictPrivateFilePermissions(
-            string filePath)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        File.SetUnixFileMode(
-            filePath,
-            UnixFileMode.UserRead
-            | UnixFileMode.UserWrite);
     }
 
     private sealed record KeyStorePaths(
-        string PrivateKeyFile,
         string KeyRingFile,
+        string RuntimeTokenFile,
         string LockFile);
 }

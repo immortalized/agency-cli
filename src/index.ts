@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { addCommand } from "./commands/add.js";
 import { runCreateCommand } from "./commands/create.js";
 import { databaseCommand } from "./commands/database.js";

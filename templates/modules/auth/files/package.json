@@ -5,6 +5,9 @@
     "auth:build": "docker compose --profile tools build auth-tool",
     "auth:init": "docker compose --profile tools run --rm --build auth-tool keys init",
     "auth:rotate": "docker compose --profile tools run --rm --build auth-tool keys rotate",
+    "auth:test-policy": "docker compose --profile tools run --rm --build auth-tool keys verify-runtime-policy",
+    "auth:test-jwt": "node scripts/auth-jwt-integration.mjs",
+    "auth:test-rotation": "node scripts/auth-jwt-rotation-integration.mjs",
     "auth:admin:create": "docker compose --profile tools run --rm --build auth-tool users create-initial-admin"
   }
 }

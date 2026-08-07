@@ -1,62 +1,38 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using __PROJECT_NAMESPACE__.Application.Auth.Abstractions;
 using __PROJECT_NAMESPACE__.Application.Auth.Models;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
 
 namespace __PROJECT_NAMESPACE__.Infrastructure.Auth;
 
-public sealed class JwtAccessTokenService
-    : IAccessTokenService,
-      IDisposable
+public sealed class JwtAccessTokenService(
+    IOptions<JwtOptions> options,
+    IJwtSigningProvider signingProvider)
+    : IAccessTokenService
 {
-    private readonly JwtOptions _options;
-    private readonly RSA _privateKey;
-    private readonly JwtKeyRing _keyRing;
+    private static readonly JsonSerializerOptions
+        JsonOptions = new()
+        {
+            DefaultIgnoreCondition =
+                JsonIgnoreCondition.WhenWritingNull
+        };
 
-    private readonly SigningCredentials
-        _signingCredentials;
+    private readonly JwtOptions _options =
+        options?.Value
+        ?? throw new ArgumentNullException(
+            nameof(options));
 
-    private readonly JwtSecurityTokenHandler
-        _tokenHandler = new();
+    private readonly IJwtSigningProvider
+        _signingProvider = signingProvider
+        ?? throw new ArgumentNullException(
+            nameof(signingProvider));
 
-    private bool _disposed;
-
-    public JwtAccessTokenService(
-        IOptions<JwtOptions> options)
+    public async Task<AccessTokenResult> CreateAsync(
+        AccessTokenSubject subject,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(options);
-
-        _options = options.Value;
-
-        _keyRing = JwtKeyRing.Load(
-            _options.KeyRingFile);
-
-        _privateKey =
-            RsaKeyLoader.LoadPrivateKeyFromFile(
-                _options.PrivateKeyFile);
-
-        var securityKey =
-            new RsaSecurityKey(_privateKey)
-            {
-                KeyId = _keyRing.ActiveKeyId
-            };
-
-        _signingCredentials =
-            new SigningCredentials(
-                securityKey,
-                SecurityAlgorithms.RsaSha256);
-    }
-
-    public AccessTokenResult Create(
-        AccessTokenSubject subject)
-    {
-        ObjectDisposedException.ThrowIf(
-            _disposed,
-            this);
-
         ArgumentNullException.ThrowIfNull(subject);
 
         if (subject.UserId == Guid.Empty)
@@ -70,84 +46,101 @@ public sealed class JwtAccessTokenService
             subject.Username);
 
         var nowUtc = DateTimeOffset.UtcNow;
-
         var expiresAtUtc = nowUtc.AddMinutes(
-            _options
-                .AccessTokenLifetimeMinutes);
+            _options.AccessTokenLifetimeMinutes);
 
-        var claims = new List<Claim>
+        var header = new JwtHeader(
+            "RS256",
+            "JWT",
+            _signingProvider.KeyId);
+
+        var payload = new JwtPayload(
+            subject.UserId.ToString(),
+            subject.Username,
+            Guid.NewGuid().ToString(),
+            nowUtc.ToUnixTimeSeconds(),
+            subject.Email,
+            _options.Issuer,
+            _options.Audience,
+            nowUtc.ToUnixTimeSeconds(),
+            expiresAtUtc.ToUnixTimeSeconds());
+
+        var encodedHeader = Base64UrlEncode(
+            JsonSerializer.SerializeToUtf8Bytes(
+                header,
+                JsonOptions));
+
+        var encodedPayload = Base64UrlEncode(
+            JsonSerializer.SerializeToUtf8Bytes(
+                payload,
+                JsonOptions));
+
+        var signingInput = Encoding.ASCII.GetBytes(
+            $"{encodedHeader}.{encodedPayload}");
+
+        var signatureResult =
+            await _signingProvider.SignAsync(
+                signingInput,
+                cancellationToken);
+
+        if (signatureResult.Signature.IsEmpty)
         {
-            new(
-                JwtRegisteredClaimNames.Sub,
-                subject.UserId.ToString()),
-
-            new(
-                JwtRegisteredClaimNames.UniqueName,
-                subject.Username),
-
-            new(
-                JwtRegisteredClaimNames.Jti,
-                Guid.NewGuid().ToString()),
-
-            new(
-                JwtRegisteredClaimNames.Iat,
-                nowUtc
-                    .ToUnixTimeSeconds()
-                    .ToString(),
-                ClaimValueTypes.Integer64)
-        };
-
-        if (!string.IsNullOrWhiteSpace(
-                subject.Email))
-        {
-            claims.Add(
-                new Claim(
-                    JwtRegisteredClaimNames.Email,
-                    subject.Email));
+            throw new InvalidOperationException(
+                "The JWT signing provider returned an empty signature.");
         }
 
-        var descriptor =
-            new SecurityTokenDescriptor
-            {
-                Issuer = _options.Issuer,
-                Audience = _options.Audience,
-                Subject =
-                    new ClaimsIdentity(claims),
-                NotBefore =
-                    nowUtc.UtcDateTime,
-                IssuedAt =
-                    nowUtc.UtcDateTime,
-                Expires =
-                    expiresAtUtc.UtcDateTime,
-                SigningCredentials =
-                    _signingCredentials
-            };
-
-        var securityToken =
-            _tokenHandler.CreateToken(
-                descriptor);
-
-        var token =
-            _tokenHandler.WriteToken(
-                securityToken);
+        var encodedSignature = Base64UrlEncode(
+            signatureResult.Signature.Span);
 
         return new AccessTokenResult(
-            token,
+            $"{encodedHeader}.{encodedPayload}.{encodedSignature}",
             expiresAtUtc);
     }
 
-    public void Dispose()
+    private static string Base64UrlEncode(
+        ReadOnlySpan<byte> value)
     {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _privateKey.Dispose();
-        _keyRing.Dispose();
-
-        _disposed = true;
-
-        GC.SuppressFinalize(this);
+        return Convert.ToBase64String(value)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
     }
+
+    private sealed record JwtHeader(
+        [property: JsonPropertyName("alg")]
+        string Algorithm,
+
+        [property: JsonPropertyName("typ")]
+        string Type,
+
+        [property: JsonPropertyName("kid")]
+        string KeyId);
+
+    private sealed record JwtPayload(
+        [property: JsonPropertyName("sub")]
+        string Subject,
+
+        [property: JsonPropertyName("unique_name")]
+        string Username,
+
+        [property: JsonPropertyName("jti")]
+        string JwtId,
+
+        [property: JsonPropertyName("iat")]
+        long IssuedAt,
+
+        [property: JsonPropertyName("email")]
+        string? Email,
+
+        [property: JsonPropertyName("iss")]
+        string Issuer,
+
+        [property: JsonPropertyName("aud")]
+        string Audience,
+
+        [property: JsonPropertyName("nbf")]
+        long NotBefore,
+
+        [property: JsonPropertyName("exp")]
+        long Expiration);
 }

@@ -2,9 +2,11 @@ using __PROJECT_NAMESPACE__.Application.Auth.Models;
 
 namespace __PROJECT_NAMESPACE__.Application.Auth.Abstractions;
 
-public interface IAccessTokenService
+public interface IJwtSigningProvider
 {
-    Task<AccessTokenResult> CreateAsync(
-        AccessTokenSubject subject,
+    string KeyId { get; }
+
+    Task<JwtSignatureResult> SignAsync(
+        ReadOnlyMemory<byte> signingInput,
         CancellationToken cancellationToken = default);
 }

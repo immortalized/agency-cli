@@ -1,5 +1,7 @@
+using __PROJECT_NAMESPACE__.Infrastructure.Database;
 using __PROJECT_NAMESPACE__.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace __PROJECT_NAMESPACE__.Auth.Tool;
 
@@ -7,16 +9,15 @@ public static class AuthToolDatabase
 {
     public static AppDbContext CreateDbContext()
     {
-        var connectionString =
-            Environment.GetEnvironmentVariable(
-                "ConnectionStrings__Database");
+        var configuration =
+            new ConfigurationBuilder()
+                .AddEnvironmentVariables()
+                .Build();
 
-        if (string.IsNullOrWhiteSpace(
-                connectionString))
-        {
-            throw new InvalidOperationException(
-                "ConnectionStrings__Database is not configured.");
-        }
+        var connectionString =
+            DatabaseConnectionStringFactory.Create(
+                configuration,
+                AppContext.BaseDirectory);
 
         var options =
             new DbContextOptionsBuilder<AppDbContext>()

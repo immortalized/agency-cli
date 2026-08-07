@@ -1,15 +1,50 @@
+# DEVELOPMENT ONLY: OpenBao runs unsealed, without TLS, with in-memory storage.
+# Replace this entire service and its bootstrap authentication for production.
 services:
+  openbao:
+    image: openbao/openbao:2.6.0
+    command:
+      - server
+      - -dev
+      - -dev-root-token-id=__PROJECT_SLUG__-local-dev-bootstrap
+      - -dev-listen-address=0.0.0.0:8200
+      - -dev-no-store-token
+
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+
+    healthcheck:
+      test:
+        - CMD
+        - bao
+        - status
+
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+
+    restart: unless-stopped
+
   api:
     environment:
       Auth__Jwt__Issuer: "__PROJECT_SLUG__"
       Auth__Jwt__Audience: "__PROJECT_SLUG__-api"
       Auth__Jwt__AccessTokenLifetimeMinutes: "10"
-      Auth__Jwt__PrivateKeyFile: "/run/secrets/auth_jwt_private_key"
       Auth__Jwt__KeyRingFile: "/run/secrets/auth_jwt_key_ring"
+      Auth__Jwt__OpenBao__Address: "http://openbao:8200"
+      Auth__Jwt__OpenBao__TransitMount: "transit"
+      Auth__Jwt__OpenBao__KeyName: "__PROJECT_SLUG__-jwt"
+      Auth__Jwt__OpenBao__TokenFile: "/run/secrets/openbao_api_token"
+      Auth__Jwt__OpenBao__RequestTimeoutSeconds: "10"
 
     secrets:
-      - auth_jwt_private_key
       - auth_jwt_key_ring
+      - openbao_api_token
+
+    depends_on:
+      openbao:
+        condition: service_healthy
 
   auth-tool:
     profiles:
@@ -21,6 +56,13 @@ services:
 
     environment:
       AUTH_KEY_DIRECTORY: "/workspace/.secrets"
+      OPENBAO_ADDRESS: "http://openbao:8200"
+      OPENBAO_TRANSIT_MOUNT: "transit"
+      OPENBAO_JWT_KEY_NAME: "__PROJECT_SLUG__-jwt"
+      OPENBAO_RUNTIME_POLICY_NAME: "__PROJECT_SLUG__-jwt-signer"
+      OPENBAO_RUNTIME_TOKEN_FILE: "/workspace/.secrets/openbao-api-token"
+      OPENBAO_BOOTSTRAP_TOKEN: "__PROJECT_SLUG__-local-dev-bootstrap"
+      OPENBAO_REQUEST_TIMEOUT_SECONDS: "10"
 
       Database__Host: database
       Database__Port: "5432"
@@ -37,6 +79,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      openbao:
+        condition: service_healthy
 
     restart: "no"
 
@@ -47,8 +91,8 @@ services:
       - ALL
 
 secrets:
-  auth_jwt_private_key:
-    file: ./.secrets/auth-jwt-private-key.pem
-
   auth_jwt_key_ring:
     file: ./.secrets/auth-jwt-key-ring.json
+
+  openbao_api_token:
+    file: ./.secrets/openbao-api-token

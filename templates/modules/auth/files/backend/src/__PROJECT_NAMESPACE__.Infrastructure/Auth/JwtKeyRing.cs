@@ -12,13 +12,17 @@ public sealed class JwtKeyRing : IDisposable
 
     private JwtKeyRing(
         string activeKeyId,
+        int activeKeyVersion,
         List<RsaSecurityKey> validationKeys)
     {
         ActiveKeyId = activeKeyId;
+        ActiveKeyVersion = activeKeyVersion;
         _validationKeys = validationKeys;
     }
 
     public string ActiveKeyId { get; }
+
+    public int ActiveKeyVersion { get; }
 
     public IReadOnlyCollection<SecurityKey>
         ValidationKeys => _validationKeys;
@@ -89,8 +93,14 @@ public sealed class JwtKeyRing : IDisposable
                     });
             }
 
+            var activeEntry = document.Keys
+                .Single(entry =>
+                    entry.KeyId ==
+                    document.ActiveKeyId);
+
             return new JwtKeyRing(
                 document.ActiveKeyId,
+                activeEntry.TransitKeyVersion,
                 keys);
         }
         catch
@@ -118,7 +128,7 @@ public sealed class JwtKeyRing : IDisposable
     private static void ValidateDocument(
         JwtKeyRingDocument document)
     {
-        if (document.Version != 1)
+        if (document.Version != 2)
         {
             throw new InvalidOperationException(
                 $"Unsupported JWT key ring version '{document.Version}'.");
@@ -172,6 +182,12 @@ public sealed class JwtKeyRing : IDisposable
                 throw new InvalidOperationException(
                     $"JWT key '{entry.KeyId}' has no public key.");
             }
+
+            if (entry.TransitKeyVersion < 1)
+            {
+                throw new InvalidOperationException(
+                    $"JWT key '{entry.KeyId}' has an invalid Transit key version.");
+            }
         }
     }
 
@@ -206,5 +222,7 @@ public sealed class JwtKeyRing : IDisposable
 
         public string PublicKeyPem { get; init; }
             = string.Empty;
+
+        public int TransitKeyVersion { get; init; }
     }
 }

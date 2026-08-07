@@ -19,6 +19,9 @@ public static class AuthToolProgram
                 ["keys", "rotate"] =>
                     await RotateKeysAsync(),
 
+                ["keys", "verify-runtime-policy"] =>
+                    await VerifyRuntimePolicyAsync(),
+
                 ["users", "create-initial-admin"] =>
                     await CreateInitialAdminAsync(),
 
@@ -45,14 +48,14 @@ public static class AuthToolProgram
             GetKeyDirectory();
 
         Console.WriteLine(
-            "Generating initial JWT signing key...");
+            "Bootstrapping OpenBao Transit JWT signing...");
 
         var result =
             await JwtKeyStore.InitializeAsync(
                 keyDirectory);
 
         Console.WriteLine(
-            "JWT key store initialized successfully.");
+            "OpenBao Transit JWT signing initialized successfully.");
 
         Console.WriteLine(
             $"Active key id: {result.ActiveKeyId}");
@@ -61,7 +64,21 @@ public static class AuthToolProgram
             $"Validation keys: {result.ValidationKeyCount}");
 
         Console.WriteLine(
-            "Existing keys are never overwritten.");
+            "Only public validation keys were written to the project.");
+
+        return 0;
+    }
+
+    private static async Task<int>
+        VerifyRuntimePolicyAsync()
+    {
+        Console.WriteLine(
+            "Verifying the OpenBao runtime API policy...");
+
+        await OpenBaoRuntimePolicyVerifier.VerifyAsync();
+
+        Console.WriteLine(
+            "Runtime policy verified: configured signing is allowed and privileged operations are denied.");
 
         return 0;
     }
@@ -182,8 +199,9 @@ public static class AuthToolProgram
             Auth Tool
 
             Usage:
-              keys init                    Generate the initial JWT signing key.
-              keys rotate                  Rotate the JWT signing key.
+              keys init                    Bootstrap Transit, the JWT key, policy and runtime token.
+              keys rotate                  Rotate the OpenBao Transit JWT signing key.
+              keys verify-runtime-policy   Exercise allowed and denied runtime API operations.
               users create-initial-admin   Create the first administrator account.
               help                         Show this help message.
             """);

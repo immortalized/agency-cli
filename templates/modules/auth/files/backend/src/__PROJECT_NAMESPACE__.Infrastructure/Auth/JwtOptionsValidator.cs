@@ -27,29 +27,34 @@ public sealed class JwtOptionsValidator
                 "Auth:Jwt:Audience must be configured.");
         }
 
-        if (
-            options.AccessTokenLifetimeMinutes
+        if (options.AccessTokenLifetimeMinutes
             is < 1 or > 30)
         {
             errors.Add(
                 "Auth:Jwt:AccessTokenLifetimeMinutes must be between 1 and 30.");
         }
 
-        ValidateFile(
-            options.PrivateKeyFile,
-            "Auth:Jwt:PrivateKeyFile",
-            errors);
-
-        ValidateFile(
+        ValidateAbsoluteFile(
             options.KeyRingFile,
             "Auth:Jwt:KeyRingFile",
             errors);
 
+        ValidateOpenBaoOptions(
+            options.OpenBao,
+            errors);
+
         if (errors.Count == 0)
         {
-            ValidateKeyMaterial(
-                options,
-                errors);
+            try
+            {
+                using var keyRing = JwtKeyRing.Load(
+                    options.KeyRingFile);
+            }
+            catch (Exception exception)
+            {
+                errors.Add(
+                    $"JWT public key ring is invalid: {exception.Message}");
+            }
         }
 
         return errors.Count == 0
@@ -57,7 +62,59 @@ public sealed class JwtOptionsValidator
             : ValidateOptionsResult.Fail(errors);
     }
 
-    private static void ValidateFile(
+    private static void ValidateOpenBaoOptions(
+        OpenBaoJwtSigningOptions options,
+        ICollection<string> errors)
+    {
+        if (!Uri.TryCreate(
+                options.Address,
+                UriKind.Absolute,
+                out var address)
+            || (address.Scheme != Uri.UriSchemeHttp
+                && address.Scheme != Uri.UriSchemeHttps))
+        {
+            errors.Add(
+                "Auth:Jwt:OpenBao:Address must be an absolute HTTP or HTTPS address.");
+        }
+
+        ValidatePathSegment(
+            options.TransitMount,
+            "Auth:Jwt:OpenBao:TransitMount",
+            errors);
+
+        ValidatePathSegment(
+            options.KeyName,
+            "Auth:Jwt:OpenBao:KeyName",
+            errors);
+
+        ValidateAbsoluteFile(
+            options.TokenFile,
+            "Auth:Jwt:OpenBao:TokenFile",
+            errors);
+
+        if (options.RequestTimeoutSeconds
+            is < 1 or > 60)
+        {
+            errors.Add(
+                "Auth:Jwt:OpenBao:RequestTimeoutSeconds must be between 1 and 60.");
+        }
+    }
+
+    private static void ValidatePathSegment(
+        string value,
+        string configurationName,
+        ICollection<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Contains('/', StringComparison.Ordinal)
+            || value.Contains("..", StringComparison.Ordinal))
+        {
+            errors.Add(
+                $"{configurationName} must be a single non-empty path segment.");
+        }
+    }
+
+    private static void ValidateAbsoluteFile(
         string filePath,
         string configurationName,
         ICollection<string> errors)
@@ -66,7 +123,6 @@ public sealed class JwtOptionsValidator
         {
             errors.Add(
                 $"{configurationName} must be configured.");
-
             return;
         }
 
@@ -74,7 +130,6 @@ public sealed class JwtOptionsValidator
         {
             errors.Add(
                 $"{configurationName} must be an absolute path.");
-
             return;
         }
 
@@ -82,70 +137,6 @@ public sealed class JwtOptionsValidator
         {
             errors.Add(
                 $"{configurationName} does not exist: '{filePath}'.");
-        }
-    }
-
-    private static void ValidateKeyMaterial(
-        JwtOptions options,
-        ICollection<string> errors)
-    {
-        try
-        {
-            using var keyRing =
-                JwtKeyRing.Load(
-                    options.KeyRingFile);
-
-            using var privateKey =
-                RsaKeyLoader
-                    .LoadPrivateKeyFromFile(
-                        options.PrivateKeyFile);
-
-            var activePublicKey =
-                keyRing.ValidationKeys
-                    .OfType<
-                        Microsoft.IdentityModel.Tokens
-                            .RsaSecurityKey>()
-                    .Single(key =>
-                        key.KeyId ==
-                        keyRing.ActiveKeyId);
-
-            var privatePublicParameters =
-                privateKey.ExportParameters(
-                    includePrivateParameters:
-                        false);
-
-            var activePublicParameters =
-                activePublicKey.Rsa!
-                    .ExportParameters(
-                        includePrivateParameters:
-                            false);
-
-            if (
-                privatePublicParameters.Modulus
-                    is null
-                || activePublicParameters.Modulus
-                    is null
-                || privatePublicParameters.Exponent
-                    is null
-                || activePublicParameters.Exponent
-                    is null
-                || !privatePublicParameters.Modulus
-                    .AsSpan()
-                    .SequenceEqual(
-                        activePublicParameters.Modulus)
-                || !privatePublicParameters.Exponent
-                    .AsSpan()
-                    .SequenceEqual(
-                        activePublicParameters.Exponent))
-            {
-                errors.Add(
-                    "JWT private key does not match the active public key.");
-            }
-        }
-        catch (Exception exception)
-        {
-            errors.Add(
-                $"JWT key material is invalid: {exception.Message}");
         }
     }
 }

@@ -97,6 +97,14 @@ public sealed class AuthModule
 
         app.UseAuthentication();
         app.UseAuthorization();
+
+        if (app.Environment.IsDevelopment())
+        {
+            app.MapGet(
+                    "/api/auth/dev/validate-token",
+                    () => Results.NoContent())
+                .RequireAuthorization();
+        }
     }
 
     public void Dispose()

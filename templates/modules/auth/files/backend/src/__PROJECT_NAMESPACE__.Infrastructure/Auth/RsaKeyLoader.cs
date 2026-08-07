@@ -7,36 +7,6 @@ public static class RsaKeyLoader
     private const int MinimumKeySizeBits =
         3_072;
 
-    public static RSA LoadPrivateKeyFromFile(
-        string privateKeyFile)
-    {
-        var pem = ReadRequiredFile(
-            privateKeyFile,
-            "JWT private key");
-
-        var rsa = RSA.Create();
-
-        try
-        {
-            rsa.ImportFromPem(pem);
-
-            EnsureSecureKeySize(rsa);
-
-            if (!HasPrivateKey(rsa))
-            {
-                throw new InvalidOperationException(
-                    "The configured JWT private key file does not contain private key material.");
-            }
-
-            return rsa;
-        }
-        catch
-        {
-            rsa.Dispose();
-            throw;
-        }
-    }
-
     public static RSA LoadPublicKeyFromPem(
         string publicKeyPem)
     {
@@ -60,55 +30,6 @@ public static class RsaKeyLoader
         }
     }
 
-    private static string ReadRequiredFile(
-        string filePath,
-        string description)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(
-            filePath);
-
-        if (!Path.IsPathFullyQualified(filePath))
-        {
-            throw new InvalidOperationException(
-                $"{description} path must be absolute.");
-        }
-
-        if (!File.Exists(filePath))
-        {
-            throw new FileNotFoundException(
-                $"{description} file was not found.",
-                filePath);
-        }
-
-        string content;
-
-        try
-        {
-            content =
-                File.ReadAllText(filePath);
-        }
-        catch (Exception exception)
-            when (
-                exception is IOException
-                or UnauthorizedAccessException)
-        {
-            throw new InvalidOperationException(
-                $"{description} file could not be read.",
-                exception);
-        }
-
-        content = content.Trim();
-
-        if (string.IsNullOrWhiteSpace(
-                content))
-        {
-            throw new InvalidOperationException(
-                $"{description} file is empty.");
-        }
-
-        return content;
-    }
-
     private static void EnsureSecureKeySize(
         RSA rsa)
     {
@@ -119,23 +40,4 @@ public static class RsaKeyLoader
         }
     }
 
-    private static bool HasPrivateKey(
-        RSA rsa)
-    {
-        try
-        {
-            var parameters =
-                rsa.ExportParameters(
-                    includePrivateParameters: true);
-
-            return parameters.D is
-            {
-                Length: > 0
-            };
-        }
-        catch (CryptographicException)
-        {
-            return false;
-        }
-    }
 }

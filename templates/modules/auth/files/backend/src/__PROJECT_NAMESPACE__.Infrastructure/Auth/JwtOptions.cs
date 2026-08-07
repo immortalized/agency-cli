@@ -17,9 +17,12 @@ public sealed class JwtOptions
         init;
     } = 10;
 
-    public string PrivateKeyFile { get; init; }
-        = string.Empty;
-
     public string KeyRingFile { get; init; }
         = string.Empty;
+
+    public OpenBaoJwtSigningOptions OpenBao
+    {
+        get;
+        init;
+    } = new();
 }

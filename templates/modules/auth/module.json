@@ -22,6 +22,11 @@
       "project": "Infrastructure",
       "name": "Microsoft.Extensions.Options.ConfigurationExtensions",
       "version": "10.0.10"
+    },
+    {
+      "project": "Infrastructure",
+      "name": "Microsoft.Extensions.Http",
+      "version": "10.0.10"
     }
   ],
   "migration": {

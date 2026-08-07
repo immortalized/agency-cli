@@ -52,7 +52,28 @@ public static class DependencyInjection
             IRefreshTokenService,
             RefreshTokenService>();
 
-        services.AddSingleton<
+        services.AddHttpClient<
+                IJwtSigningProvider,
+                OpenBaoJwtSigningProvider>(
+                (serviceProvider, httpClient) =>
+                {
+                    var jwtOptions =
+                        serviceProvider
+                            .GetRequiredService<
+                                IOptions<JwtOptions>>()
+                            .Value;
+
+                    httpClient.BaseAddress = new Uri(
+                        jwtOptions.OpenBao.Address,
+                        UriKind.Absolute);
+
+                    httpClient.Timeout =
+                        TimeSpan.FromSeconds(
+                            jwtOptions.OpenBao
+                                .RequestTimeoutSeconds);
+                });
+
+        services.AddTransient<
             IAccessTokenService,
             JwtAccessTokenService>();
 
