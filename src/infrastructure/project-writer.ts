@@ -1,4 +1,8 @@
-import { access, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +13,7 @@ import {
   type TemplateTokens,
 } from "./token-replacer.js";
 import { validateGeneratedTemplate } from "./template-validator.js";
+import { writeProjectSecrets } from "./project-secret-writer.js";
 
 interface ProjectManifest {
   generatorVersion: string;
@@ -16,10 +21,15 @@ interface ProjectManifest {
   modules: string[];
 }
 
-const currentFilePath = fileURLToPath(import.meta.url);
-const currentDirectory = path.dirname(currentFilePath);
+const currentFilePath =
+  fileURLToPath(import.meta.url);
 
-async function pathExists(targetPath: string): Promise<boolean> {
+const currentDirectory =
+  path.dirname(currentFilePath);
+
+async function pathExists(
+  targetPath: string,
+): Promise<boolean> {
   try {
     await access(targetPath);
     return true;
@@ -28,26 +38,56 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-export async function writeProject(outputDirectory: string, projectNames: ProjectNames): Promise<void> {
-  const absoluteDirectory = path.resolve(outputDirectory);
+export async function writeProject(
+  outputDirectory: string,
+  projectNames: ProjectNames,
+): Promise<void> {
+  const absoluteDirectory =
+    path.resolve(outputDirectory);
 
   if (await pathExists(absoluteDirectory)) {
-    throw new Error(`Target directory already exists: ${absoluteDirectory}`);
+    throw new Error(
+      `Target directory already exists: ${absoluteDirectory}`,
+    );
   }
 
-  const templateDirectory = path.resolve(currentDirectory, "../../templates/base");
+  const templateDirectory = path.resolve(
+    currentDirectory,
+    "../../templates/base",
+  );
 
   const tokens: TemplateTokens = {
-    "__PROJECT_DISPLAY_NAME__": projectNames.displayName,
-    "__PROJECT_SLUG__": projectNames.slug,
-    "__PROJECT_NAMESPACE__": projectNames.namespace,
-    "__DATABASE_NAME__": projectNames.databaseName,
+    "__PROJECT_DISPLAY_NAME__":
+      projectNames.displayName,
+
+    "__PROJECT_SLUG__":
+      projectNames.slug,
+
+    "__PROJECT_NAMESPACE__":
+      projectNames.namespace,
+
+    "__DATABASE_NAME__":
+      projectNames.databaseName,
   };
 
   try {
-    await copyTemplate(templateDirectory, absoluteDirectory);
-    await replaceTokensInDirectory(absoluteDirectory, tokens);
-    await validateGeneratedTemplate(absoluteDirectory);
+    await copyTemplate(
+      templateDirectory,
+      absoluteDirectory,
+    );
+
+    await replaceTokensInDirectory(
+      absoluteDirectory,
+      tokens,
+    );
+
+    await validateGeneratedTemplate(
+      absoluteDirectory,
+    );
+
+    await writeProjectSecrets(
+      absoluteDirectory,
+    );
 
     const manifest: ProjectManifest = {
       generatorVersion: "0.1.0",
@@ -55,11 +95,18 @@ export async function writeProject(outputDirectory: string, projectNames: Projec
       modules: [],
     };
 
-    const manifestPath = path.join(absoluteDirectory, ".agency.json");
+    const manifestPath = path.join(
+      absoluteDirectory,
+      ".agency.json",
+    );
 
     await writeFile(
       manifestPath,
-      `${JSON.stringify(manifest, null, 2)}\n`,
+      `${JSON.stringify(
+        manifest,
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
   } catch (error) {

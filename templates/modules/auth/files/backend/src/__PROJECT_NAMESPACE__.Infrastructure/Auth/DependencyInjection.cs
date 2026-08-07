@@ -7,12 +7,16 @@ namespace __PROJECT_NAMESPACE__.Infrastructure.Auth;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddAuthInfrastructure(
-        this IServiceCollection services,
-        IConfiguration configuration)
+    public static IServiceCollection
+        AddAuthInfrastructure(
+            this IServiceCollection services,
+            IConfiguration configuration)
     {
-        ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(
+            services);
+
+        ArgumentNullException.ThrowIfNull(
+            configuration);
 
         services
             .AddOptions<AuthOptions>()
@@ -39,6 +43,10 @@ public static class DependencyInjection
         services.AddSingleton<
             IPasswordHasher,
             Argon2PasswordHasher>();
+
+        services.AddSingleton<
+            ITemporaryPasswordGenerator,
+            TemporaryPasswordGenerator>();
 
         services.AddSingleton<
             IRefreshTokenService,

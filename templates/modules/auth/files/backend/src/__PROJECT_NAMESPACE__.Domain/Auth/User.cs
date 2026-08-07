@@ -10,10 +10,12 @@ public sealed class User
 
     public User(
         Guid id,
+        Guid roleId,
         string username,
         string normalizedUsername,
         string passwordHash,
         DateTimeOffset createdAtUtc,
+        bool mustChangePassword,
         string? email = null,
         string? normalizedEmail = null)
     {
@@ -22,6 +24,13 @@ public sealed class User
             throw new ArgumentException(
                 "User id cannot be empty.",
                 nameof(id));
+        }
+
+        if (roleId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "Role id cannot be empty.",
+                nameof(roleId));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
@@ -44,17 +53,24 @@ public sealed class User
         }
 
         Id = id;
+        RoleId = roleId;
         Username = username;
         NormalizedUsername = normalizedUsername;
         Email = email;
         NormalizedEmail = normalizedEmail;
         PasswordHash = passwordHash;
         IsActive = true;
+        MustChangePassword = mustChangePassword;
+        AuthVersion = 1;
         CreatedAtUtc = createdAtUtc;
         UpdatedAtUtc = createdAtUtc;
     }
 
     public Guid Id { get; private set; }
+
+    public Guid RoleId { get; private set; }
+
+    public Role Role { get; private set; } = null!;
 
     public string Username { get; private set; } = null!;
 
@@ -67,6 +83,10 @@ public sealed class User
     public string PasswordHash { get; private set; } = null!;
 
     public bool IsActive { get; private set; }
+
+    public bool MustChangePassword { get; private set; }
+
+    public long AuthVersion { get; private set; }
 
     public DateTimeOffset CreatedAtUtc { get; private set; }
 
@@ -88,7 +108,9 @@ public sealed class User
         ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
 
         PasswordHash = passwordHash;
+        MustChangePassword = false;
         PasswordChangedAtUtc = changedAtUtc;
+        AuthVersion++;
         UpdatedAtUtc = changedAtUtc;
     }
 
@@ -117,7 +139,8 @@ public sealed class User
         UpdatedAtUtc = changedAtUtc;
     }
 
-    public void RecordSuccessfulLogin(DateTimeOffset loggedInAtUtc)
+    public void RecordSuccessfulLogin(
+        DateTimeOffset loggedInAtUtc)
     {
         LastLoginAtUtc = loggedInAtUtc;
     }
@@ -131,6 +154,7 @@ public sealed class User
 
         IsActive = false;
         DisabledAtUtc = disabledAtUtc;
+        AuthVersion++;
         UpdatedAtUtc = disabledAtUtc;
     }
 
@@ -143,6 +167,7 @@ public sealed class User
 
         IsActive = true;
         DisabledAtUtc = null;
+        AuthVersion++;
         UpdatedAtUtc = enabledAtUtc;
     }
 }

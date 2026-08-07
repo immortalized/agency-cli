@@ -22,8 +22,21 @@ services:
     environment:
       AUTH_KEY_DIRECTORY: "/workspace/.secrets"
 
+      Database__Host: database
+      Database__Port: "5432"
+      Database__Name: __DATABASE_NAME__
+      Database__Username: __PROJECT_SLUG___app
+      Database__PasswordFile: /run/secrets/database_password
+
+    secrets:
+      - database_password
+
     volumes:
       - ./.secrets:/workspace/.secrets
+
+    depends_on:
+      database:
+        condition: service_healthy
 
     restart: "no"
 

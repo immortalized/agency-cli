@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "auth:build": "docker compose --profile tools build auth-tool",
-    "auth:init": "docker compose --profile tools run --rm auth-tool keys init",
-    "auth:rotate": "docker compose --profile tools run --rm auth-tool keys rotate"
+    "auth:init": "docker compose --profile tools run --rm --build auth-tool keys init",
+    "auth:rotate": "docker compose --profile tools run --rm --build auth-tool keys rotate",
+    "auth:admin:create": "docker compose --profile tools run --rm --build auth-tool users create-initial-admin"
   }
 }

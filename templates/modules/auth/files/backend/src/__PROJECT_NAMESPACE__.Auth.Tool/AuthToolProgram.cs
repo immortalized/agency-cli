@@ -1,3 +1,5 @@
+using __PROJECT_NAMESPACE__.Infrastructure.Auth;
+
 namespace __PROJECT_NAMESPACE__.Auth.Tool;
 
 public static class AuthToolProgram
@@ -16,6 +18,9 @@ public static class AuthToolProgram
 
                 ["keys", "rotate"] =>
                     await RotateKeysAsync(),
+
+                ["users", "create-initial-admin"] =>
+                    await CreateInitialAdminAsync(),
 
                 ["help"] or [] =>
                     ShowHelp(),
@@ -92,6 +97,68 @@ public static class AuthToolProgram
         return 0;
     }
 
+    private static async Task<int>
+        CreateInitialAdminAsync()
+    {
+        Console.Write(
+            "Administrator username: ");
+
+        var username = Console.ReadLine();
+
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            throw new InvalidOperationException(
+                "Administrator username is required.");
+        }
+
+        Console.Write(
+            "Administrator email (optional): ");
+
+        var email = Console.ReadLine();
+
+        await using var dbContext =
+            AuthToolDatabase.CreateDbContext();
+
+        var creator = new InitialAdminCreator(
+            dbContext,
+            new Argon2PasswordHasher());
+
+        var result =
+            await creator.CreateAsync(
+                username,
+                email);
+
+        Console.WriteLine();
+        Console.WriteLine(
+            "Initial administrator created successfully.");
+        Console.WriteLine();
+
+        Console.WriteLine(
+            $"User id: {result.UserId}");
+
+        Console.WriteLine(
+            $"Username: {result.Username}");
+
+        if (result.Email is not null)
+        {
+            Console.WriteLine(
+                $"Email: {result.Email}");
+        }
+
+        Console.WriteLine(
+            $"Temporary password: {result.TemporaryPassword}");
+
+        Console.WriteLine(
+            "Password change required: yes");
+
+        Console.WriteLine();
+
+        Console.WriteLine(
+            "Store the temporary password securely. It will not be displayed again.");
+
+        return 0;
+    }
+
     private static string GetKeyDirectory()
     {
         var keyDirectory =
@@ -115,9 +182,10 @@ public static class AuthToolProgram
             Auth Tool
 
             Usage:
-              keys init      Generate the initial JWT signing key.
-              keys rotate    Rotate the JWT signing key.
-              help           Show this help message.
+              keys init                    Generate the initial JWT signing key.
+              keys rotate                  Rotate the JWT signing key.
+              users create-initial-admin   Create the first administrator account.
+              help                         Show this help message.
             """);
 
         return 0;

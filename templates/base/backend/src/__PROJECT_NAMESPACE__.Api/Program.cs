@@ -1,13 +1,18 @@
 using __PROJECT_NAMESPACE__.Api.Modules;
 using __PROJECT_NAMESPACE__.Infrastructure;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder =
+    WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
-builder.Services.AddInfrastructure(builder.Configuration);
 
-var applicationModules = ApplicationModuleLoader.Discover();
+builder.Services.AddInfrastructure(
+    builder.Configuration,
+    builder.Environment.ContentRootPath);
+
+var applicationModules =
+    ApplicationModuleLoader.Discover();
 
 foreach (var module in applicationModules)
 {
@@ -28,7 +33,7 @@ foreach (var module in applicationModules)
     module.ConfigureApplication(app);
 }
 
-//app.UseHttpsRedirection();
+// app.UseHttpsRedirection();
 
 app.MapControllers();
 

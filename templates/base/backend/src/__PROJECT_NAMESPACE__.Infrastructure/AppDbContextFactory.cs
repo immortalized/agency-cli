@@ -1,3 +1,4 @@
+using __PROJECT_NAMESPACE__.Infrastructure.Database;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.Configuration;
@@ -7,7 +8,8 @@ namespace __PROJECT_NAMESPACE__.Infrastructure.Persistence;
 public sealed class AppDbContextFactory
     : IDesignTimeDbContextFactory<AppDbContext>
 {
-    public AppDbContext CreateDbContext(string[] args)
+    public AppDbContext CreateDbContext(
+        string[] args)
     {
         var environment =
             Environment.GetEnvironmentVariable(
@@ -17,29 +19,33 @@ public sealed class AppDbContextFactory
         var currentDirectory =
             Directory.GetCurrentDirectory();
 
-        var apiDirectory = ResolveApiDirectory(
-            currentDirectory);
+        var apiDirectory =
+            ResolveApiDirectory(
+                currentDirectory);
 
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(apiDirectory)
-            .AddJsonFile(
-                "appsettings.json",
-                optional: false)
-            .AddJsonFile(
-                $"appsettings.{environment}.json",
-                optional: true)
-            .AddEnvironmentVariables()
-            .Build();
+        var configuration =
+            new ConfigurationBuilder()
+                .SetBasePath(apiDirectory)
+                .AddJsonFile(
+                    "appsettings.json",
+                    optional: false)
+                .AddJsonFile(
+                    $"appsettings.{environment}.json",
+                    optional: true)
+                .AddEnvironmentVariables()
+                .Build();
 
         var connectionString =
-            configuration.GetConnectionString("Database")
-            ?? throw new InvalidOperationException(
-                "Connection string 'Database' is not configured.");
+            DatabaseConnectionStringFactory.Create(
+                configuration,
+                apiDirectory);
 
         var optionsBuilder =
-            new DbContextOptionsBuilder<AppDbContext>();
+            new DbContextOptionsBuilder<
+                AppDbContext>();
 
-        optionsBuilder.UseNpgsql(connectionString);
+        optionsBuilder.UseNpgsql(
+            connectionString);
 
         return new AppDbContext(
             optionsBuilder.Options);

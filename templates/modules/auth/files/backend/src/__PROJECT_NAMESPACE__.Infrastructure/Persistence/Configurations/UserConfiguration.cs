@@ -7,7 +7,8 @@ namespace __PROJECT_NAMESPACE__.Infrastructure.Persistence.Configurations;
 public sealed class UserConfiguration
     : IEntityTypeConfiguration<User>
 {
-    public void Configure(EntityTypeBuilder<User> builder)
+    public void Configure(
+        EntityTypeBuilder<User> builder)
     {
         builder.ToTable("auth_users");
 
@@ -15,6 +16,9 @@ public sealed class UserConfiguration
 
         builder.Property(user => user.Id)
             .ValueGeneratedNever();
+
+        builder.Property(user => user.RoleId)
+            .IsRequired();
 
         builder.Property(user => user.Username)
             .HasMaxLength(64)
@@ -37,6 +41,12 @@ public sealed class UserConfiguration
         builder.Property(user => user.IsActive)
             .IsRequired();
 
+        builder.Property(user => user.MustChangePassword)
+            .IsRequired();
+
+        builder.Property(user => user.AuthVersion)
+            .IsRequired();
+
         builder.Property(user => user.CreatedAtUtc)
             .IsRequired();
 
@@ -54,12 +64,17 @@ public sealed class UserConfiguration
             .HasDatabaseName(
                 "ux_auth_users_normalized_email");
 
+        builder.HasIndex(user => user.RoleId)
+            .HasDatabaseName(
+                "ix_auth_users_role_id");
+
         builder.HasMany(user => user.RefreshTokens)
             .WithOne(token => token.User)
             .HasForeignKey(token => token.UserId)
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.Navigation(user => user.RefreshTokens)
-            .UsePropertyAccessMode(PropertyAccessMode.Field);
+            .UsePropertyAccessMode(
+                PropertyAccessMode.Field);
     }
 }

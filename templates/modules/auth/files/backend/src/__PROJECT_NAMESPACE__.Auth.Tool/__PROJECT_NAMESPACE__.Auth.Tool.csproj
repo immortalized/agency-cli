@@ -8,4 +8,10 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\__PROJECT_NAMESPACE__.Application\__PROJECT_NAMESPACE__.Application.csproj" />
+    <ProjectReference Include="..\__PROJECT_NAMESPACE__.Domain\__PROJECT_NAMESPACE__.Domain.csproj" />
+    <ProjectReference Include="..\__PROJECT_NAMESPACE__.Infrastructure\__PROJECT_NAMESPACE__.Infrastructure.csproj" />
+  </ItemGroup>
+
 </Project>
