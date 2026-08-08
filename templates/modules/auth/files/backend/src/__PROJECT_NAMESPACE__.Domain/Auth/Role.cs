@@ -3,6 +3,7 @@ namespace __PROJECT_NAMESPACE__.Domain.Auth;
 public sealed class Role
 {
     private readonly List<User> _users = [];
+    private readonly List<RolePermission> _rolePermissions = [];
 
     private Role()
     {
@@ -55,4 +56,7 @@ public sealed class Role
 
     public IReadOnlyCollection<User> Users
         => _users.AsReadOnly();
+
+    public IReadOnlyCollection<RolePermission> RolePermissions
+        => _rolePermissions.AsReadOnly();
 }

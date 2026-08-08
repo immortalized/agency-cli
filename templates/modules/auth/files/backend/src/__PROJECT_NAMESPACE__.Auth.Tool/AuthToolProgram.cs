@@ -22,6 +22,12 @@ public static class AuthToolProgram
                 ["keys", "verify-runtime-policy"] =>
                     await VerifyRuntimePolicyAsync(),
 
+                ["database", "verify-boundary"] =>
+                    await VerifyDatabaseBoundaryAsync(),
+
+                ["database", "rotate-runtime"] =>
+                    await RotateRuntimeDatabaseCredentialAsync(),
+
                 ["users", "create-initial-admin"] =>
                     await CreateInitialAdminAsync(),
 
@@ -48,14 +54,14 @@ public static class AuthToolProgram
             GetKeyDirectory();
 
         Console.WriteLine(
-            "Bootstrapping OpenBao Transit JWT signing...");
+            "Bootstrapping OpenBao JWT signing and database credentials...");
 
         var result =
             await JwtKeyStore.InitializeAsync(
                 keyDirectory);
 
         Console.WriteLine(
-            "OpenBao Transit JWT signing initialized successfully.");
+            "OpenBao JWT signing and database credentials initialized successfully.");
 
         Console.WriteLine(
             $"Active key id: {result.ActiveKeyId}");
@@ -78,7 +84,43 @@ public static class AuthToolProgram
         await OpenBaoRuntimePolicyVerifier.VerifyAsync();
 
         Console.WriteLine(
-            "Runtime policy verified: configured signing is allowed and privileged operations are denied.");
+            "Runtime policy verified: configured signing and runtime database retrieval are allowed; privileged operations are denied.");
+
+        return 0;
+    }
+
+    private static async Task<int>
+        VerifyDatabaseBoundaryAsync()
+    {
+        Console.WriteLine(
+            "Verifying runtime PostgreSQL privileges...");
+
+        await RuntimeDatabaseBoundaryVerifier
+            .VerifyAsync();
+
+        Console.WriteLine(
+            "Runtime database boundary verified: application CRUD is allowed; schema and role administration are denied.");
+
+        return 0;
+    }
+
+    private static async Task<int>
+        RotateRuntimeDatabaseCredentialAsync()
+    {
+        Console.WriteLine(
+            "Rotating the OpenBao-managed runtime PostgreSQL credential...");
+
+        await OpenBaoDatabaseRotationVerifier
+            .RotateAndVerifyAsync();
+
+        Console.WriteLine(
+            "Runtime PostgreSQL credential rotated and verified successfully.");
+
+        Console.WriteLine(
+            "Recreate the API container so it retrieves the current credential:");
+
+        Console.WriteLine(
+            "docker compose up -d --force-recreate api");
 
         return 0;
     }
@@ -199,9 +241,11 @@ public static class AuthToolProgram
             Auth Tool
 
             Usage:
-              keys init                    Bootstrap Transit, the JWT key, policy and runtime token.
+              keys init                    Bootstrap JWT signing and PostgreSQL runtime credentials.
               keys rotate                  Rotate the OpenBao Transit JWT signing key.
               keys verify-runtime-policy   Exercise allowed and denied runtime API operations.
+              database verify-boundary     Verify runtime CRUD and denied PostgreSQL admin operations.
+              database rotate-runtime      Rotate and verify the runtime PostgreSQL password.
               users create-initial-admin   Create the first administrator account.
               help                         Show this help message.
             """);

@@ -9,17 +9,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case "create": {
-      const projectName = args
-        .join(" ")
-        .trim();
-
-      if (!projectName) {
-        throw new Error(
-          "Missing project name. Usage: agency create <project-name>",
-        );
-      }
-
-      await runCreateCommand(projectName);
+      await runCreateCommand(args);
       break;
     }
 
@@ -48,13 +38,17 @@ function printHelp(): void {
 Agency CLI
 
 Usage:
-  agency create <project-name>  Create a new project.
+  agency create <project-name>        Create a frontend-only project.
+  agency create <project-name> --api  Add an ASP.NET Core API.
+  agency create <project-name> --db   Add an API and PostgreSQL.
   agency add <module-name>      Add a module to the current project.
   agency database update       Apply pending database migrations.
   agency help                  Show this help message.
 
 Examples:
   agency create "Example Project"
+  agency create "Example API" --api
+  agency create "Example App" --db
   agency add auth
   agency database update
 `);

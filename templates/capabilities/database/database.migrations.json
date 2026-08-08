@@ -1,0 +1,6 @@
+{
+  "DatabaseMigration": {
+    "Username": "__PROJECT_SLUG___app",
+    "PasswordFile": ".secrets/database-password"
+  }
+}

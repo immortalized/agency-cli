@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using __PROJECT_NAMESPACE__.Application.Auth.Abstractions;
+using __PROJECT_NAMESPACE__.Application.Auth.Authorization;
 using __PROJECT_NAMESPACE__.Application.Auth.Models;
 using Microsoft.Extensions.Options;
 
@@ -60,6 +61,10 @@ public sealed class JwtAccessTokenService(
             Guid.NewGuid().ToString(),
             nowUtc.ToUnixTimeSeconds(),
             subject.Email,
+            subject.Role,
+            subject.Permissions,
+            subject.AuthVersion,
+            subject.MustChangePassword,
             _options.Issuer,
             _options.Audience,
             nowUtc.ToUnixTimeSeconds(),
@@ -131,6 +136,18 @@ public sealed class JwtAccessTokenService(
 
         [property: JsonPropertyName("email")]
         string? Email,
+
+        [property: JsonPropertyName(AuthClaimNames.Role)]
+        string Role,
+
+        [property: JsonPropertyName(AuthClaimNames.Permission)]
+        IReadOnlyCollection<string> Permissions,
+
+        [property: JsonPropertyName(AuthClaimNames.AuthVersion)]
+        long AuthVersion,
+
+        [property: JsonPropertyName(AuthClaimNames.MustChangePassword)]
+        bool MustChangePassword,
 
         [property: JsonPropertyName("iss")]
         string Issuer,

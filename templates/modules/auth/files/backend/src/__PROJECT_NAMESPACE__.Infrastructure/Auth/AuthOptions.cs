@@ -8,4 +8,7 @@ public sealed class AuthOptions
 
     public string RefreshCookieName { get; init; }
         = "__Host-refresh-token";
+
+    public RegistrationMode RegistrationMode { get; init; }
+        = RegistrationMode.AdminOnly;
 }

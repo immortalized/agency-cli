@@ -33,6 +33,12 @@ public sealed class AuthOptionsValidator
                 "Auth:RefreshCookieName must start with '__Host-'.");
         }
 
+        if (!Enum.IsDefined(options.RegistrationMode))
+        {
+            errors.Add(
+                "Auth:RegistrationMode must be 'AdminOnly' or 'Public'.");
+        }
+
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);

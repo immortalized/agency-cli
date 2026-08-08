@@ -1,60 +1,6 @@
 name: __PROJECT_SLUG__
 
 services:
-  database:
-    image: postgres:17-alpine
-    restart: unless-stopped
-
-    environment:
-      POSTGRES_DB: __DATABASE_NAME__
-      POSTGRES_USER: __PROJECT_SLUG___app
-      POSTGRES_PASSWORD_FILE: /run/secrets/database_password
-
-    secrets:
-      - database_password
-
-    volumes:
-      - database_data:/var/lib/postgresql/data
-
-    ports:
-      - "5432:5432"
-
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U __PROJECT_SLUG___app -d __DATABASE_NAME__
-
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-
-  api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-
-    restart: unless-stopped
-
-    environment:
-      ASPNETCORE_ENVIRONMENT: Development
-
-      Database__Host: database
-      Database__Port: "5432"
-      Database__Name: __DATABASE_NAME__
-      Database__Username: __PROJECT_SLUG___app
-      Database__PasswordFile: /run/secrets/database_password
-
-    secrets:
-      - database_password
-
-    ports:
-      - "8080:8080"
-
-    depends_on:
-      database:
-        condition: service_healthy
-
   frontend:
     build:
       context: ./frontend
@@ -63,18 +9,7 @@ services:
     restart: unless-stopped
 
     environment:
-      API_BASE_URL: http://api:8080
+      API_BASE_URL: http://localhost:8080
 
     ports:
       - "3000:3000"
-
-    depends_on:
-      api:
-        condition: service_started
-
-secrets:
-  database_password:
-    file: ./.secrets/database-password
-
-volumes:
-  database_data:

@@ -148,6 +148,10 @@ public sealed class OpenBaoTransitAdminClient(
             path "{{_options.TransitMount}}/sign/{{_options.KeyName}}/sha2-256" {
               capabilities = ["update"]
             }
+
+            path "{{_options.DatabaseMount}}/static-creds/{{_options.DatabaseStaticRoleName}}" {
+              capabilities = ["read"]
+            }
             """;
 
         using var response = await SendAsync(
@@ -175,8 +179,9 @@ public sealed class OpenBaoTransitAdminClient(
                     _options.RuntimePolicyName
                 },
                 no_default_policy = true,
+                no_parent = true,
                 renewable = false,
-                ttl = "24h",
+                ttl = "8760h",
                 display_name = "generated-api-jwt-signer"
             },
             cancellationToken);

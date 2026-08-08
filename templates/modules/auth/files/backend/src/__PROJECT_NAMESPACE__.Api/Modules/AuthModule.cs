@@ -1,6 +1,15 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Globalization;
+using System.Threading.RateLimiting;
+using __PROJECT_NAMESPACE__.Api.Authorization;
+using __PROJECT_NAMESPACE__.Application.Auth.Authorization;
+using __PROJECT_NAMESPACE__.Domain.Auth;
 using __PROJECT_NAMESPACE__.Infrastructure.Auth;
+using __PROJECT_NAMESPACE__.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 namespace __PROJECT_NAMESPACE__.Api.Modules;
@@ -79,11 +88,112 @@ public sealed class AuthModule
 
                         AuthenticationType =
                             JwtBearerDefaults
-                                .AuthenticationScheme
+                                .AuthenticationScheme,
+
+                        RoleClaimType =
+                            AuthClaimNames.Role
                     };
+
+                options.Events = new JwtBearerEvents
+                {
+                    OnTokenValidated =
+                        ValidateSecurityStateAsync
+                };
             });
 
-        services.AddAuthorization();
+        services.AddAuthorization(options =>
+        {
+            options.DefaultPolicy =
+                new AuthorizationPolicyBuilder()
+                    .RequireAuthenticatedUser()
+                    .RequireClaim(
+                        AuthClaimNames.MustChangePassword,
+                        bool.FalseString.ToLowerInvariant())
+                    .Build();
+
+            options.AddPolicy(
+                AuthPolicies.PasswordChangeAllowed,
+                policy => policy
+                    .RequireAuthenticatedUser());
+        });
+
+        services.AddSingleton<IAuthorizationHandler,
+            PermissionAuthorizationHandler>();
+
+        services.AddSingleton<IAuthorizationPolicyProvider,
+            PermissionAuthorizationPolicyProvider>();
+
+        services.AddRateLimiter(options =>
+        {
+            options.AddPolicy(
+                AuthRateLimitPolicy.Name,
+                httpContext =>
+                    RateLimitPartition.GetFixedWindowLimiter(
+                        httpContext.Connection.RemoteIpAddress?
+                            .ToString() ?? "unknown",
+                        _ => new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = 30,
+                            Window = TimeSpan.FromMinutes(1),
+                            QueueLimit = 0,
+                            AutoReplenishment = true
+                        }));
+
+            options.RejectionStatusCode =
+                StatusCodes.Status429TooManyRequests;
+        });
+    }
+
+    private static async Task ValidateSecurityStateAsync(
+        TokenValidatedContext context)
+    {
+        var subject = context.Principal?.FindFirst(
+            JwtRegisteredClaimNames.Sub)?.Value;
+
+        var authVersion = context.Principal?.FindFirst(
+            AuthClaimNames.AuthVersion)?.Value;
+
+        var mustChangePassword = context.Principal?.FindFirst(
+            AuthClaimNames.MustChangePassword)?.Value;
+
+        if (!Guid.TryParse(subject, out var userId)
+            || !long.TryParse(
+                authVersion,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var tokenAuthVersion)
+            || !bool.TryParse(
+                mustChangePassword,
+                out var tokenMustChangePassword))
+        {
+            context.Fail("The access token security state is invalid.");
+            return;
+        }
+
+        var dbContext = context.HttpContext
+            .RequestServices
+            .GetRequiredService<AppDbContext>();
+
+        var userState = await dbContext.Set<User>()
+            .AsNoTracking()
+            .Where(user => user.Id == userId)
+            .Select(user => new
+            {
+                user.IsActive,
+                user.AuthVersion,
+                user.MustChangePassword
+            })
+            .SingleOrDefaultAsync(
+                context.HttpContext.RequestAborted);
+
+        if (userState is null
+            || !userState.IsActive
+            || userState.AuthVersion != tokenAuthVersion
+            || userState.MustChangePassword
+                != tokenMustChangePassword)
+        {
+            context.Fail("The access token security state is stale.");
+        }
     }
 
     public void ConfigureApplication(
@@ -95,6 +205,7 @@ public sealed class AuthModule
 
         ArgumentNullException.ThrowIfNull(app);
 
+        app.UseRateLimiter();
         app.UseAuthentication();
         app.UseAuthorization();
 

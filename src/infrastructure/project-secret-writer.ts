@@ -5,73 +5,55 @@ import {
   mkdir,
   writeFile,
 } from "node:fs/promises";
+import type { ProjectCapability } from "../project/project-capability.js";
 
-const secretsDirectoryName = ".secrets";
 const databasePasswordFileName =
   "database-password";
 
-export interface ProjectSecretWriteResult {
-  databasePasswordFile: string;
-}
-
 export async function writeProjectSecrets(
   projectRoot: string,
-): Promise<ProjectSecretWriteResult> {
+  capabilities: readonly ProjectCapability[],
+): Promise<void> {
+  if (!capabilities.includes("database")) {
+    return;
+  }
+
   const secretsDirectory = path.join(
     projectRoot,
-    secretsDirectoryName,
-  );
-
-  const databasePasswordFile = path.join(
-    secretsDirectory,
-    databasePasswordFileName,
+    ".secrets",
   );
 
   await mkdir(secretsDirectory, {
     recursive: true,
   });
 
-  await restrictDirectoryPermissions(
+  await restrictPermissions(
     secretsDirectory,
+    0o700,
   );
 
-  const password = randomBytes(48)
-    .toString("base64url");
+  const passwordFile = path.join(
+    secretsDirectory,
+    databasePasswordFileName,
+  );
 
   await writeFile(
-    databasePasswordFile,
-    `${password}\n`,
+    passwordFile,
+    `${randomBytes(48).toString("base64url")}\n`,
     {
       encoding: "utf8",
       flag: "wx",
     },
   );
 
-  await restrictSecretPermissions(
-    databasePasswordFile,
-  );
-
-  return {
-    databasePasswordFile,
-  };
+  await restrictPermissions(passwordFile, 0o600);
 }
 
-async function restrictDirectoryPermissions(
-  directoryPath: string,
+async function restrictPermissions(
+  targetPath: string,
+  mode: number,
 ): Promise<void> {
-  if (process.platform === "win32") {
-    return;
+  if (process.platform !== "win32") {
+    await chmod(targetPath, mode);
   }
-
-  await chmod(directoryPath, 0o700);
-}
-
-async function restrictSecretPermissions(
-  filePath: string,
-): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-
-  await chmod(filePath, 0o600);
 }

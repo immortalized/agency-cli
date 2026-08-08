@@ -4,6 +4,9 @@ public sealed record OpenBaoToolOptions(
     Uri Address,
     string TransitMount,
     string KeyName,
+    string DatabaseMount,
+    string DatabaseConnectionName,
+    string DatabaseStaticRoleName,
     string RuntimePolicyName,
     string RuntimeTokenFile,
     string BootstrapToken,
@@ -31,6 +34,17 @@ public sealed record OpenBaoToolOptions(
         var keyName = RequiredPathSegment(
             "OPENBAO_JWT_KEY_NAME");
 
+        var databaseMount = RequiredPathSegment(
+            "OPENBAO_DATABASE_MOUNT");
+
+        var databaseConnectionName =
+            RequiredPathSegment(
+                "OPENBAO_DATABASE_CONNECTION_NAME");
+
+        var databaseStaticRoleName =
+            RequiredPathSegment(
+                "OPENBAO_DATABASE_STATIC_ROLE_NAME");
+
         var policyName = RequiredPathSegment(
             "OPENBAO_RUNTIME_POLICY_NAME");
 
@@ -50,13 +64,45 @@ public sealed record OpenBaoToolOptions(
             address,
             transitMount,
             keyName,
+            databaseMount,
+            databaseConnectionName,
+            databaseStaticRoleName,
             policyName,
             Path.GetFullPath(
                 Required(
                     "OPENBAO_RUNTIME_TOKEN_FILE")),
-            Required(
-                "OPENBAO_BOOTSTRAP_TOKEN"),
+            ReadDevelopmentBootstrapToken(
+                Path.GetFullPath(
+                    Required(
+                        "OPENBAO_BOOTSTRAP_MATERIAL_FILE"))),
             TimeSpan.FromSeconds(timeoutSeconds));
+    }
+
+    private static string ReadDevelopmentBootstrapToken(
+        string materialFile)
+    {
+        const string prefix = "Initial Root Token: ";
+
+        if (!File.Exists(materialFile))
+        {
+            throw new InvalidOperationException(
+                "The development OpenBao bootstrap material is missing. Wait for the openbao-bootstrap service to initialize or unseal OpenBao.");
+        }
+
+        var token = File.ReadLines(materialFile)
+            .Where(line => line.StartsWith(
+                prefix,
+                StringComparison.Ordinal))
+            .Select(line => line[prefix.Length..].Trim())
+            .SingleOrDefault();
+
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            throw new InvalidOperationException(
+                "The development OpenBao bootstrap material does not contain a root token.");
+        }
+
+        return token;
     }
 
     private static string RequiredPathSegment(

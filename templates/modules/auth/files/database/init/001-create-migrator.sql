@@ -1,0 +1,28 @@
+\set migrator_password `cat /run/secrets/database_migrator_password`
+
+CREATE ROLE "__PROJECT_SLUG___migrator"
+  LOGIN
+  PASSWORD :'migrator_password'
+  NOSUPERUSER
+  NOCREATEDB
+  NOCREATEROLE
+  NOREPLICATION
+  NOBYPASSRLS;
+
+ALTER DATABASE "__DATABASE_NAME__"
+  OWNER TO "__PROJECT_SLUG___migrator";
+
+REVOKE ALL ON DATABASE "__DATABASE_NAME__"
+  FROM PUBLIC;
+
+GRANT CONNECT, TEMPORARY
+  ON DATABASE "__DATABASE_NAME__"
+  TO "__PROJECT_SLUG___migrator";
+
+\connect "__DATABASE_NAME__"
+
+REVOKE CREATE ON SCHEMA public
+  FROM PUBLIC;
+
+ALTER SCHEMA public
+  OWNER TO "__PROJECT_SLUG___migrator";

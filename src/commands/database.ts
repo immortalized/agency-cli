@@ -26,6 +26,12 @@ export async function databaseCommand(args: string[]): Promise<void> {
   const projectRoot = await findProjectRoot(startDirectory);
   const projectManifest = await readProjectManifest(projectRoot);
 
+  if (!projectManifest.capabilities.includes("database")) {
+    throw new Error(
+      "This project does not have the database capability.",
+    );
+  }
+
   console.log(`Project: ${projectManifest.project.displayName}`);
 
   await updateDatabase(projectRoot, projectManifest);

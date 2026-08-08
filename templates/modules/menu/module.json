@@ -1,7 +1,13 @@
 {
   "name": "menu",
   "version": "0.1.0",
-  "dependencies": [],
+  "dependencies": [
+    "auth"
+  ],
+  "requiredCapabilities": [
+    "api",
+    "database"
+  ],
   "migration": {
     "name": "AddMenuModule"
   }

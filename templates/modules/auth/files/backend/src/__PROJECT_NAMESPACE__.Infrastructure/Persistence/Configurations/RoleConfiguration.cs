@@ -50,5 +50,13 @@ public sealed class RoleConfiguration
             .WithOne(user => user.Role)
             .HasForeignKey(user => user.RoleId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasMany(role => role.RolePermissions)
+            .WithOne(rolePermission => rolePermission.Role)
+            .HasForeignKey(rolePermission => rolePermission.RoleId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Navigation(role => role.RolePermissions)
+            .UsePropertyAccessMode(PropertyAccessMode.Field);
     }
 }

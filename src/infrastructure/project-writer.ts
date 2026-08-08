@@ -1,12 +1,14 @@
 import {
   access,
   rm,
-  writeFile,
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ProjectNames } from "../project/project-names.js";
+import type { ProjectCapability } from "../project/project-capability.js";
+import type { ProjectManifest } from "../project/project-manifest.js";
+import { writeProjectManifest } from "../project/project-manifest-writer.js";
 import { copyTemplate } from "./template-copier.js";
 import {
   replaceTokensInDirectory,
@@ -15,17 +17,9 @@ import {
 import { validateGeneratedTemplate } from "./template-validator.js";
 import { writeProjectSecrets } from "./project-secret-writer.js";
 
-interface ProjectManifest {
-  generatorVersion: string;
-  project: ProjectNames;
-  modules: string[];
-}
-
-const currentFilePath =
-  fileURLToPath(import.meta.url);
-
-const currentDirectory =
-  path.dirname(currentFilePath);
+const currentDirectory = path.dirname(
+  fileURLToPath(import.meta.url),
+);
 
 async function pathExists(
   targetPath: string,
@@ -41,9 +35,11 @@ async function pathExists(
 export async function writeProject(
   outputDirectory: string,
   projectNames: ProjectNames,
+  capabilities: readonly ProjectCapability[],
 ): Promise<void> {
-  const absoluteDirectory =
-    path.resolve(outputDirectory);
+  const absoluteDirectory = path.resolve(
+    outputDirectory,
+  );
 
   if (await pathExists(absoluteDirectory)) {
     throw new Error(
@@ -51,30 +47,48 @@ export async function writeProject(
     );
   }
 
-  const templateDirectory = path.resolve(
+  const templatesDirectory = path.resolve(
     currentDirectory,
-    "../../templates/base",
+    "../../templates",
   );
 
   const tokens: TemplateTokens = {
-    "__PROJECT_DISPLAY_NAME__":
-      projectNames.displayName,
-
-    "__PROJECT_SLUG__":
-      projectNames.slug,
-
-    "__PROJECT_NAMESPACE__":
-      projectNames.namespace,
-
-    "__DATABASE_NAME__":
-      projectNames.databaseName,
+    __PROJECT_DISPLAY_NAME__: projectNames.displayName,
+    __PROJECT_SLUG__: projectNames.slug,
+    __PROJECT_NAMESPACE__: projectNames.namespace,
+    __DATABASE_NAME__: projectNames.databaseName,
+    __PROJECT_CAPABILITIES__: capabilities.join(", "),
   };
 
   try {
     await copyTemplate(
-      templateDirectory,
+      path.join(templatesDirectory, "base"),
       absoluteDirectory,
     );
+
+    if (capabilities.includes("api")) {
+      await copyTemplate(
+        path.join(
+          templatesDirectory,
+          "capabilities",
+          "api",
+        ),
+        absoluteDirectory,
+        true,
+      );
+    }
+
+    if (capabilities.includes("database")) {
+      await copyTemplate(
+        path.join(
+          templatesDirectory,
+          "capabilities",
+          "database",
+        ),
+        absoluteDirectory,
+        true,
+      );
+    }
 
     await replaceTokensInDirectory(
       absoluteDirectory,
@@ -87,27 +101,19 @@ export async function writeProject(
 
     await writeProjectSecrets(
       absoluteDirectory,
+      capabilities,
     );
 
     const manifest: ProjectManifest = {
-      generatorVersion: "0.1.0",
+      generatorVersion: "0.2.0",
       project: projectNames,
+      capabilities: [...capabilities],
       modules: [],
     };
 
-    const manifestPath = path.join(
+    await writeProjectManifest(
       absoluteDirectory,
-      ".agency.json",
-    );
-
-    await writeFile(
-      manifestPath,
-      `${JSON.stringify(
-        manifest,
-        null,
-        2,
-      )}\n`,
-      "utf8",
+      manifest,
     );
   } catch (error) {
     await rm(absoluteDirectory, {

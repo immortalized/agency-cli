@@ -1,17 +1,18 @@
-# DEVELOPMENT ONLY: OpenBao runs unsealed, without TLS, with in-memory storage.
-# Replace this entire service and its bootstrap authentication for production.
+# DEVELOPMENT ONLY: single-node OpenBao with persistent integrated storage,
+# HTTP, and an automated Shamir unseal helper. Replace this development
+# topology and bootstrap authentication for production.
 services:
   openbao:
     image: openbao/openbao:2.6.0
     command:
       - server
-      - -dev
-      - -dev-root-token-id=__PROJECT_SLUG__-local-dev-bootstrap
-      - -dev-listen-address=0.0.0.0:8200
-      - -dev-no-store-token
 
     environment:
       BAO_ADDR: http://127.0.0.1:8200
+
+    volumes:
+      - openbao_data:/openbao/file
+      - ./openbao/openbao-development.hcl:/openbao/config/openbao-development.hcl:ro
 
     healthcheck:
       test:
@@ -21,10 +22,39 @@ services:
 
       interval: 2s
       timeout: 2s
-      retries: 20
-      start_period: 2s
+      retries: 60
+      start_period: 5s
 
     restart: unless-stopped
+
+  openbao-bootstrap:
+    image: openbao/openbao:2.6.0
+    # The image normally changes ownership only through its server entrypoint.
+    # This helper overrides that entrypoint and needs to initialize its private
+    # named volume before dropping every Linux capability below.
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - /openbao/development/openbao-bootstrap.sh
+
+    environment:
+      BAO_ADDR: http://openbao:8200
+
+    volumes:
+      - openbao_dev_bootstrap:/openbao/dev-bootstrap
+      - ./openbao/openbao-bootstrap.sh:/openbao/development/openbao-bootstrap.sh:ro
+
+    depends_on:
+      openbao:
+        condition: service_started
+
+    restart: unless-stopped
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
 
   api:
     environment:
@@ -38,13 +68,21 @@ services:
       Auth__Jwt__OpenBao__TokenFile: "/run/secrets/openbao_api_token"
       Auth__Jwt__OpenBao__RequestTimeoutSeconds: "10"
 
-    secrets:
+      OpenBaoDatabaseCredential__Address: "http://openbao:8200"
+      OpenBaoDatabaseCredential__SecretsMount: "database"
+      OpenBaoDatabaseCredential__StaticRoleName: "__PROJECT_SLUG__-runtime"
+      OpenBaoDatabaseCredential__TokenFile: "/run/secrets/openbao_api_token"
+      OpenBaoDatabaseCredential__RequestTimeoutSeconds: "10"
+
+    secrets: !override
       - auth_jwt_key_ring
       - openbao_api_token
 
     depends_on:
       openbao:
         condition: service_healthy
+      openbao-bootstrap:
+        condition: service_started
 
   auth-tool:
     profiles:
@@ -59,28 +97,47 @@ services:
       OPENBAO_ADDRESS: "http://openbao:8200"
       OPENBAO_TRANSIT_MOUNT: "transit"
       OPENBAO_JWT_KEY_NAME: "__PROJECT_SLUG__-jwt"
+      OPENBAO_DATABASE_MOUNT: "database"
+      OPENBAO_DATABASE_CONNECTION_NAME: "__PROJECT_SLUG__-postgresql"
+      OPENBAO_DATABASE_STATIC_ROLE_NAME: "__PROJECT_SLUG__-runtime"
+      OPENBAO_DATABASE_ROTATION_PERIOD: "24h"
       OPENBAO_RUNTIME_POLICY_NAME: "__PROJECT_SLUG__-jwt-signer"
       OPENBAO_RUNTIME_TOKEN_FILE: "/workspace/.secrets/openbao-api-token"
-      OPENBAO_BOOTSTRAP_TOKEN: "__PROJECT_SLUG__-local-dev-bootstrap"
+      OPENBAO_BOOTSTRAP_MATERIAL_FILE: "/run/openbao-dev/openbao-init.txt"
       OPENBAO_REQUEST_TIMEOUT_SECONDS: "10"
 
       Database__Host: database
       Database__Port: "5432"
       Database__Name: __DATABASE_NAME__
-      Database__Username: __PROJECT_SLUG___app
-      Database__PasswordFile: /run/secrets/database_password
+      DatabaseMigration__Username: __PROJECT_SLUG___migrator
+      DatabaseMigration__PasswordFile: /run/secrets/database_migrator_password
+
+      DATABASE_BOOTSTRAP_HOST: database
+      DATABASE_BOOTSTRAP_PORT: "5432"
+      DATABASE_BOOTSTRAP_NAME: __DATABASE_NAME__
+      DATABASE_BOOTSTRAP_USERNAME: __PROJECT_SLUG___bootstrap_admin
+      DATABASE_BOOTSTRAP_PASSWORD_FILE: /run/secrets/database_bootstrap_password
+      DATABASE_MIGRATOR_USERNAME: __PROJECT_SLUG___migrator
+      DATABASE_MIGRATOR_PASSWORD_FILE: /run/secrets/database_migrator_password
+      DATABASE_OPENBAO_MANAGER_USERNAME: __PROJECT_SLUG___openbao_manager
+      DATABASE_RUNTIME_USERNAME: __PROJECT_SLUG___runtime
+      DATABASE_LEGACY_USERNAME: __PROJECT_SLUG___app
 
     secrets:
-      - database_password
+      - database_bootstrap_password
+      - database_migrator_password
 
     volumes:
       - ./.secrets:/workspace/.secrets
+      - openbao_dev_bootstrap:/run/openbao-dev:ro
 
     depends_on:
       database:
         condition: service_healthy
       openbao:
         condition: service_healthy
+      openbao-bootstrap:
+        condition: service_started
 
     restart: "no"
 
@@ -96,3 +153,7 @@ secrets:
 
   openbao_api_token:
     file: ./.secrets/openbao-api-token
+
+volumes:
+  openbao_data:
+  openbao_dev_bootstrap:

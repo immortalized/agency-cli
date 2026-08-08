@@ -35,6 +35,12 @@ public static class OpenBaoRuntimePolicyVerifier
 
         var mount = Escape(options.TransitMount);
         var key = Escape(options.KeyName);
+        var databaseMount = Escape(
+            options.DatabaseMount);
+        var databaseConnection = Escape(
+            options.DatabaseConnectionName);
+        var databaseRole = Escape(
+            options.DatabaseStaticRoleName);
 
         await ExpectSuccessAsync(
             httpClient,
@@ -48,6 +54,14 @@ public static class OpenBaoRuntimePolicyVerifier
                 signature_algorithm = "pkcs1v15"
             },
             "sign with the configured JWT key",
+            cancellationToken);
+
+        await ExpectSuccessAsync(
+            httpClient,
+            HttpMethod.Get,
+            $"v1/{databaseMount}/static-creds/{databaseRole}",
+            null,
+            "retrieve the configured runtime database credential",
             cancellationToken);
 
         var deniedRequests = new[]
@@ -98,6 +112,36 @@ public static class OpenBaoRuntimePolicyVerifier
                     signature_algorithm = "pkcs1v15"
                 },
                 "sign with an unrelated key"),
+
+            new DeniedRequest(
+                HttpMethod.Get,
+                $"v1/{databaseMount}/static-creds/{databaseRole}-migrator",
+                null,
+                "retrieve an unrelated or migrator database credential"),
+
+            new DeniedRequest(
+                HttpMethod.Post,
+                $"v1/{databaseMount}/config/{databaseConnection}",
+                new { },
+                "configure the database secrets engine"),
+
+            new DeniedRequest(
+                HttpMethod.Post,
+                $"v1/{databaseMount}/static-roles/{databaseRole}",
+                new { },
+                "change the runtime static-role configuration"),
+
+            new DeniedRequest(
+                HttpMethod.Post,
+                $"v1/{databaseMount}/rotate-role/{databaseRole}",
+                new { },
+                "rotate the runtime database credential"),
+
+            new DeniedRequest(
+                HttpMethod.Post,
+                $"v1/{databaseMount}/rotate-root/{databaseConnection}",
+                new { },
+                "rotate the database management credential"),
 
             new DeniedRequest(
                 HttpMethod.Get,

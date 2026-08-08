@@ -2,6 +2,7 @@ import process from "node:process";
 import { findModuleTemplate } from "../modules/module-locator.js";
 import { readModuleManifest } from "../modules/module-manifest-reader.js";
 import { installModule } from "../modules/module-installer.js";
+import { validateModuleRequirements } from "../modules/module-requirements.js";
 import { findProjectRoot } from "../project/project-locator.js";
 import { readProjectManifest } from "../project/project-manifest-reader.js";
 
@@ -32,6 +33,11 @@ export async function addCommand(args: string[]): Promise<void> {
       `Module directory '${requestedModuleName}' contains manifest for '${moduleManifest.name}'.`,
     );
   }
+
+  validateModuleRequirements(
+    moduleManifest,
+    projectManifest,
+  );
 
   console.log(`Installing module '${requestedModuleName}'...`);
 

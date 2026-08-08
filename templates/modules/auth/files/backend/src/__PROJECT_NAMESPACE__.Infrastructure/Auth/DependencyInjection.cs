@@ -1,6 +1,9 @@
 using __PROJECT_NAMESPACE__.Application.Auth.Abstractions;
+using __PROJECT_NAMESPACE__.Application.Auth.Authorization;
+using __PROJECT_NAMESPACE__.Infrastructure.Database;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace __PROJECT_NAMESPACE__.Infrastructure.Auth;
@@ -32,6 +35,15 @@ public static class DependencyInjection
                     JwtOptions.SectionName))
             .ValidateOnStart();
 
+        services
+            .AddOptions<
+                OpenBaoDatabaseCredentialOptions>()
+            .Bind(
+                configuration.GetSection(
+                    OpenBaoDatabaseCredentialOptions
+                        .SectionName))
+            .ValidateOnStart();
+
         services.AddSingleton<
             IValidateOptions<AuthOptions>,
             AuthOptionsValidator>();
@@ -41,12 +53,29 @@ public static class DependencyInjection
             JwtOptionsValidator>();
 
         services.AddSingleton<
+            IValidateOptions<
+                OpenBaoDatabaseCredentialOptions>,
+            OpenBaoDatabaseCredentialOptionsValidator>();
+
+        services.AddSingleton<
             IPasswordHasher,
             Argon2PasswordHasher>();
 
         services.AddSingleton<
             ITemporaryPasswordGenerator,
             TemporaryPasswordGenerator>();
+
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<
+                IPermissionDefinitionProvider,
+                AuthPermissionDefinitionProvider>());
+
+        services.AddScoped<PermissionSeeder>();
+
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<
+                IDatabaseStartupTask,
+                PermissionSeedStartupTask>());
 
         services.AddSingleton<
             IRefreshTokenService,
@@ -76,6 +105,27 @@ public static class DependencyInjection
         services.AddTransient<
             IAccessTokenService,
             JwtAccessTokenService>();
+
+        services.AddHttpClient<
+                IDatabaseCredentialProvider,
+                OpenBaoDatabaseCredentialProvider>(
+                (serviceProvider, httpClient) =>
+                {
+                    var options = serviceProvider
+                        .GetRequiredService<
+                            IOptions<
+                                OpenBaoDatabaseCredentialOptions>>()
+                        .Value;
+
+                    httpClient.BaseAddress = new Uri(
+                        options.Address,
+                        UriKind.Absolute);
+
+                    httpClient.Timeout =
+                        TimeSpan.FromSeconds(
+                            options
+                                .RequestTimeoutSeconds);
+                });
 
         return services;
     }

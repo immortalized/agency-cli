@@ -1,13 +1,17 @@
 import path from "node:path";
 import {
   access,
+  chmod,
   copyFile,
   cp,
   mkdir,
   mkdtemp,
   readdir,
+  rename,
   rm,
+  writeFile,
 } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ModuleManifest } from "./module-manifest.js";
 import type { ProjectManifest } from "../project/project-manifest.js";
@@ -23,11 +27,25 @@ import {
   restoreProjectFileBackups,
   type ProjectFileBackup,
 } from "./module-package-installer.js";
+import { validateModuleRequirements } from "./module-requirements.js";
 
 interface DirectoryBackup {
   originalDirectory: string;
   backupDirectory: string;
   existed: boolean;
+}
+
+interface FileBackup {
+  originalFile: string;
+  backupFile: string;
+}
+
+interface AppliedSecretOperations {
+  renamed: Array<{
+    from: string;
+    to: string;
+  }>;
+  generated: string[];
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -174,6 +192,17 @@ async function rollbackInstalledFiles(
   }
 }
 
+async function restoreFileBackups(
+  backups: readonly FileBackup[],
+): Promise<void> {
+  for (const backup of [...backups].reverse()) {
+    await copyFile(
+      backup.backupFile,
+      backup.originalFile,
+    );
+  }
+}
+
 function createTemplateTokens(
   manifest: ProjectManifest,
 ): Readonly<Record<string, string>> {
@@ -185,18 +214,101 @@ function createTemplateTokens(
   };
 }
 
-function validateDependencies(
-  moduleManifest: ModuleManifest,
+function resolveManifestPath(
+  configuredPath: string,
   projectManifest: ProjectManifest,
-): void {
-  const missingDependencies = moduleManifest.dependencies.filter(
-    (dependency) => !projectManifest.modules.includes(dependency),
-  );
+): string {
+  let result = configuredPath;
 
-  if (missingDependencies.length > 0) {
-    throw new Error(
-      `Module '${moduleManifest.name}' requires missing modules: ${missingDependencies.join(", ")}.`,
+  for (const [token, value] of Object.entries(
+    createTemplateTokens(projectManifest),
+  )) {
+    result = result.replaceAll(token, value);
+  }
+
+  return path.normalize(result);
+}
+
+function resolveManifestPaths(
+  configuredPaths: readonly string[] | undefined,
+  projectManifest: ProjectManifest,
+): Set<string> {
+  return new Set(
+    (configuredPaths ?? []).map((configuredPath) =>
+      resolveManifestPath(
+        configuredPath,
+        projectManifest,
+      ),
+    ),
+  );
+}
+
+async function applySecretOperations(
+  projectRoot: string,
+  projectManifest: ProjectManifest,
+  moduleManifest: ModuleManifest,
+  applied: AppliedSecretOperations,
+): Promise<void> {
+
+  for (const operation of
+    moduleManifest.secrets?.rename ?? []) {
+    const from = path.join(
+      projectRoot,
+      resolveManifestPath(
+        operation.from,
+        projectManifest,
+      ),
     );
+
+    const to = path.join(
+      projectRoot,
+      resolveManifestPath(
+        operation.to,
+        projectManifest,
+      ),
+    );
+
+    await rename(from, to);
+    applied.renamed.push({ from, to });
+  }
+
+  for (const configuredPath of
+    moduleManifest.secrets?.generate ?? []) {
+    const filePath = path.join(
+      projectRoot,
+      resolveManifestPath(
+        configuredPath,
+        projectManifest,
+      ),
+    );
+
+    await writeFile(
+      filePath,
+      `${randomBytes(48).toString("base64url")}\n`,
+      {
+        encoding: "utf8",
+        flag: "wx",
+      },
+    );
+
+    if (process.platform !== "win32") {
+      await chmod(filePath, 0o600);
+    }
+
+    applied.generated.push(filePath);
+  }
+
+}
+
+async function rollbackSecretOperations(
+  applied: AppliedSecretOperations,
+): Promise<void> {
+  for (const generated of [...applied.generated].reverse()) {
+    await rm(generated, { force: true });
+  }
+
+  for (const operation of [...applied.renamed].reverse()) {
+    await rename(operation.to, operation.from);
   }
 }
 
@@ -206,7 +318,10 @@ export async function installModule(
   moduleDirectory: string,
   moduleManifest: ModuleManifest,
 ): Promise<void> {
-  validateDependencies(moduleManifest, projectManifest);
+  validateModuleRequirements(
+    moduleManifest,
+    projectManifest,
+  );
 
   const moduleFilesDirectory = path.join(moduleDirectory, "files");
 
@@ -235,10 +350,20 @@ export async function installModule(
     "project-files-backup",
   );
 
+  const changedFileBackupDirectory = path.join(
+    transactionDirectory,
+    "changed-files-backup",
+  );
+
   const createdFiles: string[] = [];
   const createdDirectories: string[] = [];
   let migrationBackup: DirectoryBackup | undefined;
   let projectFileBackups: ProjectFileBackup[] = [];
+  const changedFileBackups: FileBackup[] = [];
+  let appliedSecrets: AppliedSecretOperations = {
+    renamed: [],
+    generated: [],
+  };
 
   try {
     await cp(moduleFilesDirectory, stagedFilesDirectory, {
@@ -256,20 +381,110 @@ export async function installModule(
       stagedFilesDirectory,
     );
 
+    const replacements = resolveManifestPaths(
+      moduleManifest.replaces,
+      projectManifest,
+    );
+
+    const removals = resolveManifestPaths(
+      moduleManifest.removes,
+      projectManifest,
+    );
+
+    for (const replacement of replacements) {
+      if (!relativeFiles.includes(replacement)) {
+        throw new Error(
+          `Module '${moduleManifest.name}' declares replacement '${replacement}' but does not provide that file.`,
+        );
+      }
+
+      if (!(await pathExists(
+          path.join(projectRoot, replacement)))) {
+        throw new Error(
+          `Module '${moduleManifest.name}' cannot replace missing path: ${replacement}`,
+        );
+      }
+    }
+
+    for (const removal of removals) {
+      if (!(await pathExists(
+          path.join(projectRoot, removal)))) {
+        throw new Error(
+          `Module '${moduleManifest.name}' cannot remove missing path: ${removal}`,
+        );
+      }
+    }
+
+    for (const operation of
+      moduleManifest.secrets?.rename ?? []) {
+      const from = path.join(
+        projectRoot,
+        resolveManifestPath(
+          operation.from,
+          projectManifest,
+        ),
+      );
+
+      const to = path.join(
+        projectRoot,
+        resolveManifestPath(
+          operation.to,
+          projectManifest,
+        ),
+      );
+
+      if (!(await pathExists(from))) {
+        throw new Error(
+          `Module '${moduleManifest.name}' requires missing secret: ${operation.from}`,
+        );
+      }
+
+      if (await pathExists(to)) {
+        throw new Error(
+          `Module '${moduleManifest.name}' cannot create secret because it already exists: ${operation.to}`,
+        );
+      }
+    }
+
+    for (const configuredPath of
+      moduleManifest.secrets?.generate ?? []) {
+      const generatedPath = path.join(
+        projectRoot,
+        resolveManifestPath(
+          configuredPath,
+          projectManifest,
+        ),
+      );
+
+      if (await pathExists(generatedPath)) {
+        throw new Error(
+          `Module '${moduleManifest.name}' cannot create secret because it already exists: ${configuredPath}`,
+        );
+      }
+    }
+
     for (const relativeFile of relativeFiles) {
       const destinationPath = path.join(
         projectRoot,
         relativeFile,
       );
 
-      if (await pathExists(destinationPath)) {
+      if (
+        await pathExists(destinationPath) &&
+        !replacements.has(relativeFile)
+      ) {
         throw new Error(
           `Module '${moduleManifest.name}' cannot be installed because the following path already exists: ${relativeFile}`,
         );
       }
     }
 
-    for (const relativeFile of relativeFiles) {
+    await mkdir(changedFileBackupDirectory, {
+      recursive: true,
+    });
+
+    for (const [index, relativeFile] of
+      relativeFiles.entries()) {
       const sourcePath = path.join(
         stagedFilesDirectory,
         relativeFile,
@@ -288,9 +503,53 @@ export async function installModule(
         createdDirectories,
       );
 
+      if (replacements.has(relativeFile)) {
+        const backupFile = path.join(
+          changedFileBackupDirectory,
+          `replacement-${index}`,
+        );
+
+        await copyFile(destinationPath, backupFile);
+        changedFileBackups.push({
+          originalFile: destinationPath,
+          backupFile,
+        });
+      }
+
       await copyFile(sourcePath, destinationPath);
-      createdFiles.push(destinationPath);
+
+      if (!replacements.has(relativeFile)) {
+        createdFiles.push(destinationPath);
+      }
     }
+
+    for (const [index, relativePath] of
+      [...removals].entries()) {
+      const originalFile = path.join(
+        projectRoot,
+        relativePath,
+      );
+
+      const backupFile = path.join(
+        changedFileBackupDirectory,
+        `removal-${index}`,
+      );
+
+      await copyFile(originalFile, backupFile);
+      changedFileBackups.push({
+        originalFile,
+        backupFile,
+      });
+
+      await rm(originalFile);
+    }
+
+    await applySecretOperations(
+      projectRoot,
+      projectManifest,
+      moduleManifest,
+      appliedSecrets,
+    );
 
     if (
       moduleManifest.packages &&
@@ -336,6 +595,8 @@ export async function installModule(
 
     await writeProjectManifest(projectRoot, updatedManifest);
   } catch (error) {
+    await rollbackSecretOperations(appliedSecrets);
+
     if (migrationBackup) {
       await restoreDirectoryBackup(migrationBackup);
     }
@@ -345,6 +606,8 @@ export async function installModule(
         projectFileBackups,
       );
     }
+
+    await restoreFileBackups(changedFileBackups);
 
     await rollbackInstalledFiles(
       createdFiles,

@@ -2,6 +2,7 @@ using System.Data;
 using __PROJECT_NAMESPACE__.Application.Auth;
 using __PROJECT_NAMESPACE__.Application.Auth.Abstractions;
 using __PROJECT_NAMESPACE__.Domain.Auth;
+using __PROJECT_NAMESPACE__.Infrastructure.Auth;
 using __PROJECT_NAMESPACE__.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -38,6 +39,13 @@ public sealed class InitialAdminCreator(
         var normalizedEmail =
             AuthNormalizer.NormalizeEmail(
                 trimmedEmail);
+
+        var permissionSeeder = new PermissionSeeder(
+            dbContext,
+            [new AuthPermissionDefinitionProvider()]);
+
+        await permissionSeeder.SeedAsync(
+            cancellationToken);
 
         await using var transaction =
             await dbContext.Database

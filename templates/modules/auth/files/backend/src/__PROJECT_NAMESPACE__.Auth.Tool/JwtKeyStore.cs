@@ -47,11 +47,35 @@ public static class JwtKeyStore
         var key = await client.ReadKeyAsync(
             cancellationToken);
 
-        EnsureInitializationCanProceed(
+        var initializationState =
+            GetInitializationState(
             paths,
             key);
 
-        if (key is null)
+        if (initializationState ==
+            InitializationState.Configured)
+        {
+            await OpenBaoRuntimePolicyVerifier
+                .VerifyAsync(cancellationToken);
+
+            var existingKeyRing = CreateKeyRing(
+                options.KeyName,
+                key!);
+
+            ValidateKeyRing(existingKeyRing);
+
+            await WriteKeyRingAsync(
+                paths.KeyRingFile,
+                existingKeyRing,
+                cancellationToken);
+
+            return new JwtKeyOperationResult(
+                existingKeyRing.ActiveKeyId,
+                existingKeyRing.Keys.Count);
+        }
+
+        if (initializationState ==
+            InitializationState.FreshStorage)
         {
             await client.CreateKeyAsync(
                 cancellationToken);
@@ -62,12 +86,48 @@ public static class JwtKeyStore
                     "OpenBao did not return the newly created Transit key.");
         }
 
+        var configuredKey = key
+            ?? throw new InvalidOperationException(
+                "OpenBao JWT signing state is inconsistent.");
+
+        var databaseOptions = DatabaseBootstrapOptions
+            .FromEnvironment();
+
+        var databaseClient =
+            new OpenBaoDatabaseAdminClient(
+                httpClient,
+                options,
+                databaseOptions);
+
+        if (initializationState ==
+            InitializationState.FreshStorage)
+        {
+            var managementCredential =
+                await PostgresRoleBootstrapper
+                    .BootstrapAsync(
+                        databaseOptions,
+                        cancellationToken);
+
+            await databaseClient.ConfigureAsync(
+                managementCredential,
+                cancellationToken);
+        }
+        else
+        {
+            // Existing OpenBao state owns the current
+            // management/runtime database passwords. Prove
+            // that configuration is usable without rotating
+            // or rewriting either PostgreSQL role.
+            await databaseClient.ReadRuntimeCredentialAsync(
+                cancellationToken);
+        }
+
         await client.WriteRuntimePolicyAsync(
             cancellationToken);
 
         var keyRing = CreateKeyRing(
             options.KeyName,
-            key);
+            configuredKey);
 
         ValidateKeyRing(keyRing);
 
@@ -90,17 +150,18 @@ public static class JwtKeyStore
             keyRing.Keys.Count);
     }
 
-    private static void EnsureInitializationCanProceed(
+    private static InitializationState
+        GetInitializationState(
         KeyStorePaths paths,
         OpenBaoTransitKey? key)
     {
         if (key is null)
         {
-            // Development-mode OpenBao loses its in-memory
-            // key when its container is recreated. Existing
-            // local artifacts are stale in that case and may
-            // be safely replaced by this recovery bootstrap.
-            return;
+            // A deliberately deleted OpenBao volume can leave
+            // host-side public/runtime artifacts behind. They
+            // are replaced only while bootstrapping a fresh
+            // OpenBao store.
+            return InitializationState.FreshStorage;
         }
 
         var keyRingExists = File.Exists(
@@ -111,8 +172,7 @@ public static class JwtKeyStore
 
         if (keyRingExists && runtimeTokenExists)
         {
-            throw new InvalidOperationException(
-                "JWT signing is already initialized. Use 'keys rotate' to create a new signing-key version.");
+            return InitializationState.Configured;
         }
 
         if (keyRingExists || runtimeTokenExists)
@@ -120,6 +180,8 @@ public static class JwtKeyStore
             throw new InvalidOperationException(
                 "JWT signing initialization is incomplete: the local key ring and runtime token must either both exist or both be absent.");
         }
+
+        return InitializationState.MissingLocalArtifacts;
     }
 
     public static async Task<JwtKeyOperationResult>
@@ -404,4 +466,11 @@ public static class JwtKeyStore
         string KeyRingFile,
         string RuntimeTokenFile,
         string LockFile);
+
+    private enum InitializationState
+    {
+        FreshStorage,
+        MissingLocalArtifacts,
+        Configured
+    }
 }

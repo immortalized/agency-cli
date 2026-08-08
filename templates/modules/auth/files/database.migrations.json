@@ -1,0 +1,6 @@
+{
+  "DatabaseMigration": {
+    "Username": "__PROJECT_SLUG___migrator",
+    "PasswordFile": ".secrets/database-migrator-password"
+  }
+}

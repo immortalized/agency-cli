@@ -114,6 +114,16 @@ public sealed class User
         UpdatedAtUtc = changedAtUtc;
     }
 
+    public void RehashPassword(
+        string passwordHash,
+        DateTimeOffset changedAtUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
+
+        PasswordHash = passwordHash;
+        UpdatedAtUtc = changedAtUtc;
+    }
+
     public void ChangeEmail(
         string? email,
         string? normalizedEmail,
@@ -136,6 +146,57 @@ public sealed class User
 
         Email = email;
         NormalizedEmail = normalizedEmail;
+        UpdatedAtUtc = changedAtUtc;
+    }
+
+    public void UpdateProfile(
+        string username,
+        string normalizedUsername,
+        string? email,
+        string? normalizedEmail,
+        DateTimeOffset changedAtUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(username);
+        ArgumentException.ThrowIfNullOrWhiteSpace(normalizedUsername);
+
+        Username = username;
+        NormalizedUsername = normalizedUsername;
+        ChangeEmail(email, normalizedEmail, changedAtUtc);
+        AuthVersion++;
+        UpdatedAtUtc = changedAtUtc;
+    }
+
+    public void ChangeRole(
+        Guid roleId,
+        DateTimeOffset changedAtUtc)
+    {
+        if (roleId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "Role id cannot be empty.",
+                nameof(roleId));
+        }
+
+        if (RoleId == roleId)
+        {
+            return;
+        }
+
+        RoleId = roleId;
+        AuthVersion++;
+        UpdatedAtUtc = changedAtUtc;
+    }
+
+    public void SetTemporaryPassword(
+        string passwordHash,
+        DateTimeOffset changedAtUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
+
+        PasswordHash = passwordHash;
+        MustChangePassword = true;
+        PasswordChangedAtUtc = changedAtUtc;
+        AuthVersion++;
         UpdatedAtUtc = changedAtUtc;
     }
 

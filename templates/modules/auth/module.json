@@ -2,6 +2,26 @@
   "name": "auth",
   "version": "0.1.0",
   "dependencies": [],
+  "requiredCapabilities": [
+    "api",
+    "database"
+  ],
+  "replaces": [
+    "compose.yaml",
+    "database.migrations.json",
+    "backend/src/__PROJECT_NAMESPACE__.Api/appsettings.json"
+  ],
+  "secrets": {
+    "rename": [
+      {
+        "from": ".secrets/database-password",
+        "to": ".secrets/database-bootstrap-password"
+      }
+    ],
+    "generate": [
+      ".secrets/database-migrator-password"
+    ]
+  },
   "packages": [
     {
       "project": "Infrastructure",

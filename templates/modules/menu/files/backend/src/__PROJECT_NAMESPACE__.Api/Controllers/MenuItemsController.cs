@@ -1,4 +1,6 @@
+using __PROJECT_NAMESPACE__.Api.Authorization;
 using __PROJECT_NAMESPACE__.Api.Contracts.Menu;
+using __PROJECT_NAMESPACE__.Application.Menu;
 using __PROJECT_NAMESPACE__.Domain.Menu;
 using __PROJECT_NAMESPACE__.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Mvc;
@@ -7,10 +9,11 @@ using Microsoft.EntityFrameworkCore;
 namespace __PROJECT_NAMESPACE__.Api.Controllers;
 
 [ApiController]
-[Route("api/menu/items")]
+[Route("api/admin/menu/items")]
 public sealed class MenuItemsController(AppDbContext dbContext) : ControllerBase
 {
     [HttpGet]
+    [HasPermission(MenuPermissions.Read)]
     public async Task<ActionResult<IReadOnlyList<MenuItemResponse>>> GetAll(
         [FromQuery] Guid? categoryId,
         CancellationToken cancellationToken)
@@ -35,6 +38,7 @@ public sealed class MenuItemsController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [HasPermission(MenuPermissions.Read)]
     public async Task<ActionResult<MenuItemResponse>> GetById(
         Guid id,
         CancellationToken cancellationToken)
@@ -53,6 +57,7 @@ public sealed class MenuItemsController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpPost]
+    [HasPermission(MenuPermissions.Create)]
     public async Task<ActionResult<MenuItemResponse>> Create(
         CreateMenuItemRequest request,
         CancellationToken cancellationToken)
@@ -79,6 +84,7 @@ public sealed class MenuItemsController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [HasPermission(MenuPermissions.Update)]
     public async Task<ActionResult<MenuItemResponse>> Update(
         Guid id,
         UpdateMenuItemRequest request,
@@ -112,6 +118,7 @@ public sealed class MenuItemsController(AppDbContext dbContext) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [HasPermission(MenuPermissions.Delete)]
     public async Task<IActionResult> Delete(
         Guid id,
         CancellationToken cancellationToken)

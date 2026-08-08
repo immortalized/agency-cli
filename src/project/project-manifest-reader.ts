@@ -1,6 +1,11 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import type { ProjectManifest } from "./project-manifest.js";
+import {
+  isProjectCapability,
+  normalizeProjectCapabilities,
+  type ProjectCapability,
+} from "./project-capability.js";
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -8,6 +13,30 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isCapabilityArray(
+  value: unknown,
+): value is ProjectCapability[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => isProjectCapability(item))
+  ) {
+    return false;
+  }
+
+  const capabilities = new Set(value);
+  const normalized = normalizeProjectCapabilities(
+    capabilities,
+  );
+
+  return (
+    capabilities.size === value.length &&
+    normalized.length === value.length &&
+    normalized.every(
+      (capability, index) => capability === value[index],
+    )
+  );
 }
 
 function isProjectNames(value: unknown): boolean {
@@ -35,6 +64,7 @@ function isProjectManifest(value: unknown): value is ProjectManifest {
   return (
     isNonEmptyString(manifest.generatorVersion) &&
     isProjectNames(manifest.project) &&
+    isCapabilityArray(manifest.capabilities) &&
     isStringArray(manifest.modules)
   );
 }
