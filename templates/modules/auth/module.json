@@ -1,6 +1,6 @@
 {
   "name": "auth",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "dependencies": [],
   "requiredCapabilities": [
     "api",
@@ -9,6 +9,7 @@
   "replaces": [
     "compose.yaml",
     "database.migrations.json",
+    "backend/__PROJECT_NAMESPACE__.slnx",
     "backend/src/__PROJECT_NAMESPACE__.Api/appsettings.json"
   ],
   "secrets": {

@@ -10,7 +10,7 @@ Two named Docker volumes are development-only:
   keys, policies, and Database Secrets Engine state.
 - `openbao_dev_bootstrap` contains the one-share Shamir unseal key and initial
   root token. Only the continuously running development bootstrap helper and
-  operator-only auth tool mount this volume. The API does not mount it.
+  operator-only Operations tool mount this volume. The API does not mount it.
 
 The helper initializes a new empty store once and automatically unseals the
 single node. On later starts (including an OpenBao-only container restart), it
@@ -35,13 +35,13 @@ The generated development stack keeps four identities separate:
 
 - `<project>_bootstrap_admin` initializes PostgreSQL and performs controlled
   role grants. Its password is in `.secrets/database-bootstrap-password` and is
-  mounted only into PostgreSQL and the privileged auth tool.
+  mounted only into PostgreSQL and the privileged Operations tool.
 - `<project>_migrator` owns the application database and `public` schema so EF
   Core can apply migrations. Its password is in
   `.secrets/database-migrator-password`; it is available to operator tooling,
   never to an auth-enabled API container.
 - `<project>_openbao_manager` has `CREATEROLE` solely to manage the runtime
-  login. The auth tool creates a temporary bootstrap password in memory,
+  login. The Operations tool creates a temporary bootstrap password in memory,
   configures OpenBao with it, and immediately asks OpenBao to rotate it. It is
   never written to the project or supplied to the API.
 - `<project>_runtime` is the API database login. It has database connect,
@@ -58,7 +58,7 @@ owner of internal system objects, so it is retained only as a disabled,
 non-application identity when it cannot be dropped safely.
 
 The default static-role rotation period is 24 hours for development. Change
-`OPENBAO_DATABASE_ROTATION_PERIOD` on `auth-tool` before bootstrap to configure
+`OPENBAO_DATABASE_ROTATION_PERIOD` on `operations` before bootstrap to configure
 a different deployment-facing period.
 
 ## First-time setup

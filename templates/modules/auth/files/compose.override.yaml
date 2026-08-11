@@ -16,9 +16,8 @@ services:
 
     healthcheck:
       test:
-        - CMD
-        - bao
-        - status
+        - CMD-SHELL
+        - bao status; code=$$?; test $$code -eq 0 -o $$code -eq 2
 
       interval: 2s
       timeout: 2s
@@ -84,13 +83,17 @@ services:
       openbao-bootstrap:
         condition: service_started
 
-  auth-tool:
+  operations:
     profiles:
       - tools
 
     build:
       context: ./backend
-      dockerfile: Auth.Tool.Dockerfile
+      dockerfile: Operations.Dockerfile
+
+    # Development helper material is mode 0600 in a root-owned named volume.
+    # Production never applies this override and runs the image as its app user.
+    user: "0:0"
 
     environment:
       AUTH_KEY_DIRECTORY: "/workspace/.secrets"
@@ -100,10 +103,20 @@ services:
       OPENBAO_DATABASE_MOUNT: "database"
       OPENBAO_DATABASE_CONNECTION_NAME: "__PROJECT_SLUG__-postgresql"
       OPENBAO_DATABASE_STATIC_ROLE_NAME: "__PROJECT_SLUG__-runtime"
+      OPENBAO_DATABASE_MIGRATOR_STATIC_ROLE_NAME: "__PROJECT_SLUG__-migrator"
       OPENBAO_DATABASE_ROTATION_PERIOD: "24h"
       OPENBAO_RUNTIME_POLICY_NAME: "__PROJECT_SLUG__-jwt-signer"
+      OPENBAO_MIGRATOR_POLICY_NAME: "__PROJECT_SLUG__-database-migrator"
+      OPENBAO_JWT_ROTATION_POLICY_NAME: "__PROJECT_SLUG__-jwt-rotation"
+      OPENBAO_DATABASE_ROTATION_POLICY_NAME: "__PROJECT_SLUG__-database-rotation"
       OPENBAO_RUNTIME_TOKEN_FILE: "/workspace/.secrets/openbao-api-token"
+      OPENBAO_MIGRATOR_TOKEN_FILE: "/workspace/.secrets/openbao-migrator-token"
+      OPENBAO_JWT_ROTATION_TOKEN_FILE: "/workspace/.secrets/openbao-jwt-rotation-token"
+      OPENBAO_DATABASE_ROTATION_TOKEN_FILE: "/workspace/.secrets/openbao-database-rotation-token"
+      OPENBAO_PROVISIONING_TOKEN_FILE: "/workspace/.secrets/.openbao-provisioning-token"
       OPENBAO_BOOTSTRAP_MATERIAL_FILE: "/run/openbao-dev/openbao-init.txt"
+      OPENBAO_UNSEAL_MATERIAL_DIRECTORY: "/run/openbao-dev"
+      OPERATIONS_ENVIRONMENT: "Development"
       OPENBAO_REQUEST_TIMEOUT_SECONDS: "10"
 
       Database__Host: database

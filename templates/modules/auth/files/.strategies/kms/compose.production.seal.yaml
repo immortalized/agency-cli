@@ -1,0 +1,10 @@
+services:
+  openbao:
+    environment:
+      AGENCY_UNSEAL_STRATEGY: kms
+      VAULT_AWSKMS_SEAL_KEY_ID: ${VAULT_AWSKMS_SEAL_KEY_ID:?set the AWS KMS key id or ARN}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_KMS_ENDPOINT: ${AWS_KMS_ENDPOINT:-}

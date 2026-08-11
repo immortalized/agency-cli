@@ -205,12 +205,16 @@ async function restoreFileBackups(
 
 function createTemplateTokens(
   manifest: ProjectManifest,
+  moduleOptions: Readonly<Record<string, string | number | boolean>> = {},
 ): Readonly<Record<string, string>> {
   return {
     __PROJECT_DISPLAY_NAME__: manifest.project.displayName,
     __PROJECT_SLUG__: manifest.project.slug,
     __PROJECT_NAMESPACE__: manifest.project.namespace,
     __DATABASE_NAME__: manifest.project.databaseName,
+    __UNSEAL_STRATEGY__: String(moduleOptions.unsealStrategy ?? ""),
+    __UNSEAL_KEY_SHARES__: String(moduleOptions.unsealShares ?? "0"),
+    __UNSEAL_KEY_THRESHOLD__: String(moduleOptions.unsealThreshold ?? "0"),
   };
 }
 
@@ -317,6 +321,7 @@ export async function installModule(
   projectManifest: ProjectManifest,
   moduleDirectory: string,
   moduleManifest: ModuleManifest,
+  moduleOptions: Readonly<Record<string, string | number | boolean>> = {},
 ): Promise<void> {
   validateModuleRequirements(
     moduleManifest,
@@ -370,9 +375,45 @@ export async function installModule(
       recursive: true,
     });
 
+    const strategiesDirectory = path.join(
+      stagedFilesDirectory,
+      ".strategies",
+    );
+
+    if (await pathExists(strategiesDirectory)) {
+      const selectedStrategy = moduleOptions.unsealStrategy;
+
+      if (typeof selectedStrategy !== "string") {
+        throw new Error(
+          `Module '${moduleManifest.name}' requires an unseal strategy.`,
+        );
+      }
+
+      const selectedDirectory = path.join(
+        strategiesDirectory,
+        selectedStrategy,
+      );
+
+      if (!(await pathExists(selectedDirectory))) {
+        throw new Error(
+          `Module '${moduleManifest.name}' does not provide strategy '${selectedStrategy}'.`,
+        );
+      }
+
+      await cp(selectedDirectory, stagedFilesDirectory, {
+        recursive: true,
+        force: true,
+      });
+
+      await rm(strategiesDirectory, {
+        recursive: true,
+        force: true,
+      });
+    }
+
     await replaceTokensInDirectory(
       stagedFilesDirectory,
-      createTemplateTokens(projectManifest),
+      createTemplateTokens(projectManifest, moduleOptions),
     );
 
     await validateGeneratedTemplate(stagedFilesDirectory);
@@ -591,6 +632,16 @@ export async function installModule(
         ...projectManifest.modules,
         moduleManifest.name,
       ],
+      ...(Object.keys(moduleOptions).length > 0
+        ? {
+            moduleOptions: {
+              ...projectManifest.moduleOptions,
+              [moduleManifest.name]: { ...moduleOptions },
+            },
+          }
+        : projectManifest.moduleOptions
+          ? { moduleOptions: projectManifest.moduleOptions }
+          : {}),
     };
 
     await writeProjectManifest(projectRoot, updatedManifest);

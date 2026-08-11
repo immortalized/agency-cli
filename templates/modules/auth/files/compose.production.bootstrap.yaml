@@ -1,0 +1,17 @@
+services:
+  database:
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/production_database_bootstrap
+    secrets:
+      - production_database_bootstrap
+
+  operations:
+    environment:
+      DATABASE_BOOTSTRAP_PASSWORD_FILE: /run/secrets/production_database_bootstrap
+      RETIRE_DATABASE_BOOTSTRAP_CREDENTIAL: "true"
+    secrets:
+      - production_database_bootstrap
+
+secrets:
+  production_database_bootstrap:
+    file: ${PRODUCTION_DATABASE_BOOTSTRAP_SECRET_FILE:?point to a temporary mode-0644 bootstrap secret file outside the project}

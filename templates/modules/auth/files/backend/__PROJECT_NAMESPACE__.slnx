@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/__PROJECT_NAMESPACE__.Api/__PROJECT_NAMESPACE__.Api.csproj" />
+    <Project Path="src/__PROJECT_NAMESPACE__.Application/__PROJECT_NAMESPACE__.Application.csproj" />
+    <Project Path="src/__PROJECT_NAMESPACE__.Domain/__PROJECT_NAMESPACE__.Domain.csproj" />
+    <Project Path="src/__PROJECT_NAMESPACE__.Infrastructure/__PROJECT_NAMESPACE__.Infrastructure.csproj" />
+    <Project Path="src/__PROJECT_NAMESPACE__.Operations/__PROJECT_NAMESPACE__.Operations.csproj" />
+  </Folder>
+</Solution>

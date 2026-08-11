@@ -6,4 +6,8 @@ export interface ProjectManifest {
   project: ProjectNames;
   capabilities: ProjectCapability[];
   modules: string[];
+  moduleOptions?: Record<
+    string,
+    Record<string, string | number | boolean>
+  >;
 }

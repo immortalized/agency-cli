@@ -54,6 +54,27 @@ function isProjectNames(value: unknown): boolean {
   );
 }
 
+function isModuleOptions(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.values(value).every((moduleValue) =>
+    typeof moduleValue === "object" &&
+    moduleValue !== null &&
+    !Array.isArray(moduleValue) &&
+    Object.values(moduleValue).every((optionValue) =>
+      typeof optionValue === "string" ||
+      typeof optionValue === "number" ||
+      typeof optionValue === "boolean",
+    ),
+  );
+}
+
 function isProjectManifest(value: unknown): value is ProjectManifest {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -65,7 +86,8 @@ function isProjectManifest(value: unknown): value is ProjectManifest {
     isNonEmptyString(manifest.generatorVersion) &&
     isProjectNames(manifest.project) &&
     isCapabilityArray(manifest.capabilities) &&
-    isStringArray(manifest.modules)
+    isStringArray(manifest.modules) &&
+    isModuleOptions(manifest.moduleOptions)
   );
 }
 

@@ -2,3 +2,8 @@
 **/obj
 .git
 .vscode
+.config
+.secrets
+**/appsettings.Development.json
+**/*Tests*/
+**/validation/

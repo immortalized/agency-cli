@@ -1,0 +1,255 @@
+name: __PROJECT_SLUG__-production
+
+services:
+  state-permissions:
+    image: alpine:3.22
+    user: "0:0"
+    command:
+      - sh
+      - -ec
+      - |
+        diagnose() {
+          target="$$1"
+          echo "state-permissions: unable to prepare $$target" >&2
+          id >&2 || true
+          ls -ladn "$$target" >&2 || true
+          find "$$target" -maxdepth 2 -exec ls -ldn {} \; >&2 || true
+          stat -f -c 'filesystem=%T' "$$target" >&2 || true
+          df -T "$$target" >&2 || true
+          mount >&2 || true
+          if command -v lsattr >/dev/null 2>&1; then
+            lsattr -d "$$target" >&2 || true
+            find "$$target" -maxdepth 2 -exec lsattr -d {} \; >&2 || true
+          else
+            echo "state-permissions: lsattr is unavailable in this image; inspect the Docker volume mountpoint on the host." >&2
+          fi
+        }
+        prepare() {
+          target="$$1"
+          if find "$$target" \( ! -user 1654 -o ! -group 1654 \) -print -quit | grep -q .; then
+            chown -R 1654:1654 "$$target" || { diagnose "$$target"; return 1; }
+          fi
+          if [ "$$(stat -c '%a' "$$target")" != 700 ]; then
+            chmod 0700 "$$target" || { diagnose "$$target"; return 1; }
+          fi
+        }
+        prepare /runtime
+        prepare /operations
+    volumes:
+      - production_runtime_identity:/runtime
+      - production_operations_state:/operations
+    network_mode: none
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: __DATABASE_NAME__
+      POSTGRES_USER: __PROJECT_SLUG___bootstrap_admin
+    volumes:
+      - production_database_data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d __DATABASE_NAME__"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+
+  openbao:
+    image: openbao/openbao:2.6.0
+    command: ["server", "-config=/openbao/config/openbao-production.hcl"]
+    restart: unless-stopped
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+    volumes:
+      - production_openbao_data:/openbao/file
+      - ./openbao/openbao-production.hcl:/openbao/config/openbao-production.hcl:ro
+    networks:
+      - security
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "bao status; code=$$?; test $$code -eq 0 -o $$code -eq 2"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Database__Host: database
+      Database__Port: "5432"
+      Database__Name: __DATABASE_NAME__
+      Auth__Jwt__Issuer: "__PROJECT_SLUG__"
+      Auth__Jwt__Audience: "__PROJECT_SLUG__-api"
+      Auth__Jwt__AccessTokenLifetimeMinutes: "10"
+      Auth__Jwt__KeyRingFile: "/run/agency-runtime/auth-jwt-key-ring.json"
+      Auth__Jwt__OpenBao__Address: "http://openbao:8200"
+      Auth__Jwt__OpenBao__TransitMount: "transit"
+      Auth__Jwt__OpenBao__KeyName: "__PROJECT_SLUG__-jwt"
+      Auth__Jwt__OpenBao__TokenFile: "/run/agency-runtime/openbao-api-token"
+      Auth__Jwt__OpenBao__RequestTimeoutSeconds: "10"
+      OpenBaoDatabaseCredential__Address: "http://openbao:8200"
+      OpenBaoDatabaseCredential__SecretsMount: "database"
+      OpenBaoDatabaseCredential__StaticRoleName: "__PROJECT_SLUG__-runtime"
+      OpenBaoDatabaseCredential__TokenFile: "/run/agency-runtime/openbao-api-token"
+      OpenBaoDatabaseCredential__RequestTimeoutSeconds: "10"
+    volumes:
+      - production_runtime_identity:/run/agency-runtime:ro
+    networks:
+      - application
+      - data
+      - security
+    depends_on:
+      state-permissions:
+        condition: service_completed_successfully
+      database:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+      - /app/.next/cache:uid=1000,gid=1000,mode=0700,nosuid,nodev
+    environment:
+      API_BASE_URL: http://api:8080
+    ports:
+      - "3000:3000"
+    networks:
+      - application
+      - public
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  operations:
+    profiles: ["tools"]
+    build:
+      context: ./backend
+      dockerfile: Operations.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    environment:
+      OPERATIONS_ENVIRONMENT: Production
+      AUTH_KEY_DIRECTORY: /run/agency-runtime
+      OPENBAO_ADDRESS: http://openbao:8200
+      OPENBAO_UNSEAL_MATERIAL_DIRECTORY: /run/agency-operations/unseal
+      OPENBAO_TRANSIT_MOUNT: transit
+      OPENBAO_JWT_KEY_NAME: __PROJECT_SLUG__-jwt
+      OPENBAO_DATABASE_MOUNT: database
+      OPENBAO_DATABASE_CONNECTION_NAME: __PROJECT_SLUG__-postgresql
+      OPENBAO_DATABASE_STATIC_ROLE_NAME: __PROJECT_SLUG__-runtime
+      OPENBAO_DATABASE_MIGRATOR_STATIC_ROLE_NAME: __PROJECT_SLUG__-migrator
+      OPENBAO_DATABASE_ROTATION_PERIOD: 24h
+      OPENBAO_RUNTIME_POLICY_NAME: __PROJECT_SLUG__-jwt-signer
+      OPENBAO_MIGRATOR_POLICY_NAME: __PROJECT_SLUG__-database-migrator
+      OPENBAO_JWT_ROTATION_POLICY_NAME: __PROJECT_SLUG__-jwt-rotation
+      OPENBAO_DATABASE_ROTATION_POLICY_NAME: __PROJECT_SLUG__-database-rotation
+      OPENBAO_RUNTIME_TOKEN_FILE: /run/agency-runtime/openbao-api-token
+      OPENBAO_MIGRATOR_TOKEN_FILE: /run/agency-operations/openbao-migrator-token
+      OPENBAO_JWT_ROTATION_TOKEN_FILE: /run/agency-operations/openbao-jwt-rotation-token
+      OPENBAO_DATABASE_ROTATION_TOKEN_FILE: /run/agency-operations/openbao-database-rotation-token
+      OPENBAO_PROVISIONING_TOKEN_FILE: /run/agency-operations/.openbao-provisioning-token
+      OPENBAO_REQUEST_TIMEOUT_SECONDS: "20"
+      Database__Host: database
+      Database__Port: "5432"
+      Database__Name: __DATABASE_NAME__
+      DATABASE_BOOTSTRAP_HOST: database
+      DATABASE_BOOTSTRAP_PORT: "5432"
+      DATABASE_BOOTSTRAP_NAME: __DATABASE_NAME__
+      DATABASE_BOOTSTRAP_USERNAME: __PROJECT_SLUG___bootstrap_admin
+      DATABASE_MIGRATOR_USERNAME: __PROJECT_SLUG___migrator
+      DATABASE_OPENBAO_MANAGER_USERNAME: __PROJECT_SLUG___openbao_manager
+      DATABASE_RUNTIME_USERNAME: __PROJECT_SLUG___runtime
+      DATABASE_LEGACY_USERNAME: __PROJECT_SLUG___app
+    volumes:
+      - production_runtime_identity:/run/agency-runtime
+      - production_operations_state:/run/agency-operations
+    networks:
+      - data
+      - security
+    depends_on:
+      state-permissions:
+        condition: service_completed_successfully
+      database:
+        condition: service_healthy
+      openbao:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+volumes:
+  production_database_data:
+  production_openbao_data:
+  production_runtime_identity:
+  production_operations_state:
+
+networks:
+  public:
+  application:
+    internal: true
+  data:
+    internal: true
+  security:
+    internal: true

@@ -1,0 +1,4 @@
+services:
+  openbao:
+    environment:
+      AGENCY_UNSEAL_STRATEGY: passphrase

@@ -1,7 +1,6 @@
 # DEVELOPMENT ONLY. This is a single-node, HTTP OpenBao server.
 # Production deployments need their own TLS, seal, storage, and HA design.
 ui = false
-disable_mlock = true
 
 storage "raft" {
   path    = "/openbao/file"

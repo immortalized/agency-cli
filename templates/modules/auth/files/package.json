@@ -2,12 +2,20 @@
   "name": "__PROJECT_SLUG__-tools",
   "private": true,
   "scripts": {
-    "auth:build": "docker compose --profile tools build auth-tool",
-    "auth:init": "docker compose --profile tools run --rm --build auth-tool keys init",
-    "auth:rotate": "docker compose --profile tools run --rm --build auth-tool keys rotate",
-    "auth:test-policy": "docker compose --profile tools run --rm --build auth-tool keys verify-runtime-policy",
-    "auth:database:verify": "docker compose --profile tools run --rm --build auth-tool database verify-boundary",
-    "auth:database:rotate": "docker compose --profile tools run --rm --build auth-tool database rotate-runtime",
-    "auth:admin:create": "docker compose --profile tools run --rm --build auth-tool users create-initial-admin"
+    "ops": "docker compose --profile tools run --rm --build operations",
+    "ops:production": "docker compose -f compose.production.yaml -f compose.production.seal.yaml --profile tools run --rm --build operations",
+    "ops:production:bootstrap": "docker compose -f compose.production.yaml -f compose.production.seal.yaml -f compose.production.bootstrap.yaml --profile tools run --rm --build operations",
+    "auth:build": "docker compose --profile tools build operations",
+    "auth:init": "npm run ops -- auth init",
+    "auth:rotate": "npm run ops -- auth rotate",
+    "auth:test-policy": "npm run ops -- auth test-policy",
+    "auth:database:verify": "npm run ops -- database verify",
+    "auth:database:rotate": "docker compose --profile tools run --rm --build operations database rotate-runtime",
+    "auth:admin:create": "npm run ops -- auth admin-create",
+    "openbao:status": "npm run ops -- openbao status",
+    "openbao:unseal": "npm run ops -- openbao unseal",
+    "database:migrate": "npm run ops -- database migrate",
+    "compose:production": "docker compose -f compose.production.yaml -f compose.production.seal.yaml",
+    "compose:production:bootstrap": "docker compose -f compose.production.yaml -f compose.production.seal.yaml -f compose.production.bootstrap.yaml"
   }
 }

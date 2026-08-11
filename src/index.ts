@@ -42,6 +42,7 @@ Usage:
   agency create <project-name> --api  Add an ASP.NET Core API.
   agency create <project-name> --db   Add an API and PostgreSQL.
   agency add <module-name>      Add a module to the current project.
+  agency add auth [--unseal-strategy=passphrase|multi-passphrase|kms]
   agency database update       Apply pending database migrations.
   agency help                  Show this help message.
 
@@ -49,7 +50,8 @@ Examples:
   agency create "Example Project"
   agency create "Example API" --api
   agency create "Example App" --db
-  agency add auth
+  agency add auth --unseal-strategy=passphrase
+  agency add auth --unseal-strategy=multi-passphrase --unseal-shares=5 --unseal-threshold=3
   agency database update
 `);
 }
