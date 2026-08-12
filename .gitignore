@@ -1,6 +1,7 @@
 # Agency CLI dependencies and build output
 /node_modules/
 /dist/
+/.gstack/
 
 # Generated test projects
 /example-project/
