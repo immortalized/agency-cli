@@ -9,20 +9,38 @@ namespace __PROJECT_NAMESPACE__.Infrastructure.Auth;
 
 public sealed class PermissionSeeder(
     AppDbContext dbContext,
-    IEnumerable<IPermissionDefinitionProvider> providers)
+    PermissionCatalog catalog)
 {
     public const string AdministratorRoleName = "administrator";
     public const string UserRoleName = "user";
 
+    private const string AdministratorDescription =
+        "Built-in role that always holds every installed permission.";
+
+    private const string UserDescription =
+        "Built-in default role assigned to newly created accounts.";
+
+    /// <summary>
+    /// The built-in role whose permission set this seeder owns. Editing it
+    /// through the admin API is refused because the next startup would
+    /// re-grant every installed permission anyway.
+    /// </summary>
+    public static bool IsPermissionSetManaged(Role role)
+    {
+        ArgumentNullException.ThrowIfNull(role);
+
+        return role.IsSystem
+            && string.Equals(
+                role.NormalizedName,
+                AuthNormalizer.NormalizeUsername(
+                    AdministratorRoleName),
+                StringComparison.Ordinal);
+    }
+
     public async Task SeedAsync(
         CancellationToken cancellationToken = default)
     {
-        var definitions = providers
-            .SelectMany(provider => provider.GetPermissions())
-            .OrderBy(definition => definition.Name, StringComparer.Ordinal)
-            .ToArray();
-
-        ValidateDefinitions(definitions);
+        var definitions = catalog.Definitions;
 
         await using var transaction =
             await dbContext.Database.BeginTransactionAsync(
@@ -38,12 +56,14 @@ public sealed class PermissionSeeder(
         var administrator = await EnsureRoleAsync(
             AdministratorRoleName,
             "Administrator",
+            AdministratorDescription,
             nowUtc,
             cancellationToken);
 
         await EnsureRoleAsync(
             UserRoleName,
             "User",
+            UserDescription,
             nowUtc,
             cancellationToken);
 
@@ -91,6 +111,8 @@ public sealed class PermissionSeeder(
             .Select(mapping => mapping.PermissionId)
             .ToHashSetAsync(cancellationToken);
 
+        var grantsAdded = 0;
+
         foreach (var definition in definitions)
         {
             var permission = existingPermissions[definition.Name];
@@ -102,16 +124,59 @@ public sealed class PermissionSeeder(
                         administrator.Id,
                         permission.Id,
                         nowUtc));
+
+                grantsAdded++;
             }
+        }
+
+        if (grantsAdded > 0)
+        {
+            administrator.Touch(nowUtc);
+
+            // Installing a module widens the administrator permission set, so
+            // access tokens minted before this startup no longer describe it.
+            // Only the auth version is bumped here: refresh tokens stay valid
+            // so members transparently pick up the wider set on their next
+            // refresh instead of being logged out by every module install.
+            await InvalidateRoleMembersAsync(
+                administrator.Id,
+                nowUtc,
+                cancellationToken);
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
+    private async Task InvalidateRoleMembersAsync(
+        Guid roleId,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var memberIds = await dbContext.Set<UserRole>()
+            .Where(assignment => assignment.RoleId == roleId)
+            .Select(assignment => assignment.UserId)
+            .ToListAsync(cancellationToken);
+
+        if (memberIds.Count == 0)
+        {
+            return;
+        }
+
+        var members = await dbContext.Set<User>()
+            .Where(user => memberIds.Contains(user.Id))
+            .ToListAsync(cancellationToken);
+
+        foreach (var member in members)
+        {
+            member.InvalidateSessions(nowUtc);
+        }
+    }
+
     private async Task<Role> EnsureRoleAsync(
         string name,
         string displayName,
+        string description,
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken)
     {
@@ -129,6 +194,7 @@ public sealed class PermissionSeeder(
                 name,
                 normalizedName,
                 displayName,
+                description,
                 true,
                 nowUtc);
 
@@ -143,28 +209,5 @@ public sealed class PermissionSeeder(
         }
 
         return role;
-    }
-
-    private static void ValidateDefinitions(
-        IReadOnlyCollection<PermissionDefinition> definitions)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var definition in definitions)
-        {
-            if (string.IsNullOrWhiteSpace(definition.Name)
-                || string.IsNullOrWhiteSpace(definition.Module)
-                || string.IsNullOrWhiteSpace(definition.Description))
-            {
-                throw new InvalidOperationException(
-                    "Permission definitions must contain a name, module, and description.");
-            }
-
-            if (!names.Add(definition.Name))
-            {
-                throw new InvalidOperationException(
-                    $"Permission '{definition.Name}' is declared more than once.");
-            }
-        }
     }
 }

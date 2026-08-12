@@ -1,0 +1,270 @@
+#!/bin/sh
+# Operations entry point for __PROJECT_DISPLAY_NAME__.
+#
+# Runs on the host because it invokes 'docker compose' itself. Grammar:
+#
+#   ./ops <environment> <subsystem> <verb> [args...]
+#
+# Run './ops help' for the full list. This replaces the previous npm-script
+# sprawl ('npm run ops', 'npm run compose:production', ...) with one surface.
+
+set -eu
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$script_directory"
+
+program=$(basename -- "$0")
+
+DEV_FILES="-f compose.yaml -f compose.override.yaml"
+PRODUCTION_FILES="-f compose.production.yaml -f compose.production.seal.yaml"
+BOOTSTRAP_FILES="$PRODUCTION_FILES -f compose.production.bootstrap.yaml"
+
+BOOTSTRAP_SECRET_VARIABLE=PRODUCTION_DATABASE_BOOTSTRAP_SECRET_FILE
+
+fail() {
+    echo "$program: $1" >&2
+    exit 1
+}
+
+require_docker() {
+    command -v docker >/dev/null 2>&1 ||
+        fail "docker is not installed or not on PATH."
+}
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+
+usage() {
+    cat <<USAGE
+$program - operations entry point for this project.
+
+Usage:
+  ./$program <environment> <subsystem> <verb> [args...]
+  ./$program help
+
+Environments:
+  dev           Local development stack (compose.yaml + compose.override.yaml).
+  production    Single-host production stack (compose.production.yaml + seal overlay).
+
+Development (dev):
+  ./$program dev compose <args...>            Raw 'docker compose' passthrough for the dev stack.
+  ./$program dev build                        Build the Operations tool image.
+  ./$program dev auth init                    Initialize OpenBao and provision auth/database identities.
+  ./$program dev auth rotate                  Rotate the Transit JWT signing key.
+  ./$program dev auth admin-create            Create the initial administrator.
+  ./$program dev auth test-policy             Verify the restricted runtime OpenBao policy.
+  ./$program dev openbao status               Report configured strategy and actual seal state.
+  ./$program dev openbao unseal               Unseal through the generated strategy provider.
+  ./$program dev openbao rekey                Run native OpenBao root-share rotation.
+  ./$program dev database migrate             Apply EF migrations with the migrator identity.
+  ./$program dev database verify              Verify least-privilege runtime database access.
+  ./$program dev database rotate-runtime      Rotate the OpenBao-managed runtime credential.
+
+Production (production):
+  ./$program production compose <args...>     Raw 'docker compose' passthrough for the production stack.
+  ./$program production build                 Build the Operations tool image.
+  ./$program production auth init             Provision auth and database identities.
+  ./$program production auth rotate           Rotate the Transit JWT signing key.
+  ./$program production auth admin-create     Create the initial administrator.
+  ./$program production auth test-policy      Verify the restricted runtime OpenBao policy.
+  ./$program production openbao status        Report seal, provisioning, and bootstrap state.
+  ./$program production openbao unseal        Unseal after a restart.
+  ./$program production openbao rekey         Run native OpenBao root-share rotation.
+  ./$program production database migrate      Apply EF migrations with the migrator identity.
+  ./$program production database verify        Verify least-privilege runtime database access.
+  ./$program production database rotate-runtime  Rotate the OpenBao-managed runtime credential.
+
+First-time production bootstrap only:
+  ./$program production bootstrap-secret create   Generate the temporary bootstrap secret file.
+  ./$program production bootstrap-secret delete   Securely delete that file.
+  ./$program production bootstrap compose <args...>  Compose passthrough with the bootstrap overlay.
+  ./$program production bootstrap auth init       Run the very first provisioning pass.
+
+  The bootstrap overlay is refused by the Operations tool itself once bootstrap has
+  completed, including when 'docker compose ... -f compose.production.bootstrap.yaml ...'
+  is invoked by hand. 'bootstrap-secret' is exempt: it only generates local secret
+  material and stays available for a new environment.
+
+Setup:
+  chmod +x ./$program     Once, after generating or cloning the project.
+USAGE
+}
+
+# ---------------------------------------------------------------------------
+# Bootstrap secret material
+#
+# A subprocess cannot export into its parent shell, so 'create' and 'delete'
+# print the exact shell line to run on stdout and send all guidance to stderr.
+# That makes both usable directly or through:
+#
+#   eval "$(./ops production bootstrap-secret create)"
+# ---------------------------------------------------------------------------
+
+bootstrap_secret_create() {
+    secret_file=$(umask 077 && mktemp) ||
+        fail "could not create a temporary file."
+
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -base64 48 >"$secret_file" || :
+    else
+        head -c 36 /dev/urandom | base64 >"$secret_file" || :
+    fi
+
+    [ -s "$secret_file" ] || {
+        rm -f -- "$secret_file"
+        fail "could not generate random bootstrap secret material."
+    }
+
+    # Compose implements a file-backed secret as a read-only bind mount and
+    # cannot remap owner or mode. The PostgreSQL image's user and Operations
+    # UID 1654 are different users, so the single source file has to be
+    # world-readable for the short bootstrap window.
+    chmod 0644 "$secret_file" ||
+        fail "could not relax permissions on $secret_file."
+
+    {
+        echo "Created the bootstrap secret file:"
+        echo "  $secret_file  (mode 0644, readable by both the database and operations containers)"
+        echo
+        echo "Export it into this shell by running the line printed on stdout, or run:"
+        echo "  eval \"\$(./$program production bootstrap-secret create)\""
+        echo
+        echo "Delete it after bootstrap succeeds:"
+        echo "  eval \"\$(./$program production bootstrap-secret delete)\""
+    } >&2
+
+    echo "export $BOOTSTRAP_SECRET_VARIABLE=$secret_file"
+}
+
+bootstrap_secret_delete() {
+    secret_file=${1:-}
+
+    if [ -z "$secret_file" ]; then
+        eval "secret_file=\${$BOOTSTRAP_SECRET_VARIABLE:-}"
+    fi
+
+    [ -n "$secret_file" ] ||
+        fail "no bootstrap secret file given and \$$BOOTSTRAP_SECRET_VARIABLE is not set. Pass the path explicitly."
+
+    if [ -e "$secret_file" ]; then
+        if command -v shred >/dev/null 2>&1; then
+            shred -u -- "$secret_file"
+        else
+            rm -f -- "$secret_file"
+        fi
+        echo "Deleted $secret_file." >&2
+    else
+        echo "No file at $secret_file; nothing to delete." >&2
+    fi
+
+    echo "Clear the variable with the line printed on stdout, or run:" >&2
+    echo "  eval \"\$(./$program production bootstrap-secret delete)\"" >&2
+
+    echo "unset $BOOTSTRAP_SECRET_VARIABLE"
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+compose() {
+    files=$1
+    shift
+    require_docker
+    # shellcheck disable=SC2086
+    exec docker compose $files "$@"
+}
+
+run_operations() {
+    files=$1
+    shift
+    [ "$#" -gt 0 ] || fail "a subsystem command is required. Run './$program help'."
+    require_docker
+    # shellcheck disable=SC2086
+    exec docker compose $files --profile tools run --rm --build operations "$@"
+}
+
+build_operations() {
+    files=$1
+    require_docker
+    # shellcheck disable=SC2086
+    exec docker compose $files --profile tools build operations
+}
+
+dispatch() {
+    files=$1
+    label=$2
+    shift 2
+
+    [ "$#" -gt 0 ] ||
+        fail "a subsystem is required for '$label'. Run './$program help'."
+
+    subsystem=$1
+    shift
+
+    case "$subsystem" in
+        compose) compose "$files" "$@" ;;
+        build) build_operations "$files" ;;
+        auth | openbao | database | keys | users)
+            run_operations "$files" "$subsystem" "$@"
+            ;;
+        help | -h | --help)
+            usage
+            ;;
+        *)
+            fail "unknown subsystem '$subsystem' for '$label'. Run './$program help'."
+            ;;
+    esac
+}
+
+[ "$#" -gt 0 ] || {
+    usage
+    exit 0
+}
+
+environment=$1
+shift
+
+case "$environment" in
+    help | -h | --help)
+        usage
+        ;;
+
+    dev)
+        [ "${1:-}" != "bootstrap" ] ||
+            fail "development has no bootstrap overlay; use './$program dev auth init'."
+        dispatch "$DEV_FILES" dev "$@"
+        ;;
+
+    production)
+        case "${1:-}" in
+            bootstrap-secret)
+                shift
+                case "${1:-}" in
+                    create) bootstrap_secret_create ;;
+                    delete) shift; bootstrap_secret_delete "${1:-}" ;;
+                    *) fail "expected 'create' or 'delete' after 'bootstrap-secret'." ;;
+                esac
+                ;;
+
+            bootstrap)
+                shift
+                eval "configured=\${$BOOTSTRAP_SECRET_VARIABLE:-}"
+                [ -n "$configured" ] ||
+                    fail "\$$BOOTSTRAP_SECRET_VARIABLE is not set. Run: eval \"\$(./$program production bootstrap-secret create)\""
+                [ -r "$configured" ] ||
+                    fail "\$$BOOTSTRAP_SECRET_VARIABLE points at '$configured', which is not readable."
+                dispatch "$BOOTSTRAP_FILES" "production bootstrap" "$@"
+                ;;
+
+            *)
+                dispatch "$PRODUCTION_FILES" production "$@"
+                ;;
+        esac
+        ;;
+
+    *)
+        fail "unknown environment '$environment'. Expected 'dev', 'production', or 'help'."
+        ;;
+esac

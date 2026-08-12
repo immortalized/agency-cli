@@ -63,17 +63,25 @@ a different deployment-facing period.
 
 ## First-time setup
 
+Every command below runs through the `ops` script at the project root. Make it
+executable once, right after generating or cloning the project, and run
+`./ops help` to list every available command:
+
 ```bash
-docker compose up -d database openbao
-npm run auth:init
-agency database update
-npm run auth:admin:create
-npm run auth:test-policy
-npm run auth:database:verify
-docker compose up -d --build api
+chmod +x ./ops
 ```
 
-`auth:init` creates the Transit key, Database Secrets Engine configuration,
+```bash
+./ops dev compose up -d database openbao
+./ops dev auth init
+agency database update
+./ops dev auth admin-create
+./ops dev auth test-policy
+./ops dev database verify
+./ops dev compose up -d --build api
+```
+
+`auth init` creates the Transit key, Database Secrets Engine configuration,
 PostgreSQL runtime role, restricted API policy, runtime token, and public JWT
 validation ring. Run it before migrations so PostgreSQL default privileges
 grant runtime access to tables and sequences subsequently created by the
@@ -86,15 +94,15 @@ does not rotate or recreate the Transit key or database state. Use the specific
 rotation commands when rotation is intended.
 
 If both local runtime artifacts were deleted while OpenBao storage remains,
-`auth:init` verifies the existing database engine, rewrites the same restricted
+`auth init` verifies the existing database engine, rewrites the same restricted
 policy, and issues a replacement restricted token/key ring. It does not
 reconfigure PostgreSQL or rotate OpenBao-managed database credentials.
 
 For an ordinary restart, no auth initialization or API recreation is needed:
 
 ```bash
-docker compose down
-docker compose up -d
+./ops dev compose down
+./ops dev compose up -d
 ```
 
 PostgreSQL and OpenBao named volumes, the Transit key, database-engine state,
@@ -104,19 +112,19 @@ OpenBao-managed database password when its new container starts.
 To deliberately erase all development database/OpenBao state:
 
 ```bash
-docker compose down -v
-docker compose up -d database openbao openbao-bootstrap
-npm run auth:init
+./ops dev compose down -v
+./ops dev compose up -d database openbao openbao-bootstrap
+./ops dev auth init
 ```
 
 The next start initializes new OpenBao storage and new development bootstrap
-material, then `auth:init` performs a fresh Agency bootstrap. The generated
+material, then `auth init` performs a fresh Agency bootstrap. The generated
 `.secrets` directory can contain stale public/runtime artifacts until that
-fresh `auth:init` replaces them; never copy those artifacts to production.
+fresh `auth init` replaces them; never copy those artifacts to production.
 
 ## Verify login and JWT behavior
 
-Create an administrator with `npm run auth:admin:create`, start the API, and
+Create an administrator with `./ops dev auth admin-create`, start the API, and
 use the printed credentials with the login endpoint:
 
 ```bash
@@ -134,8 +142,8 @@ validated locally by ASP.NET Core with public keys from
 ## JWT key rotation
 
 ```bash
-npm run auth:rotate
-docker compose up -d --force-recreate api
+./ops dev auth rotate
+./ops dev compose up -d --force-recreate api
 ```
 
 Rotation creates a new Transit key version and makes its versioned `kid`
@@ -148,8 +156,8 @@ OpenBao rotates the static role automatically at the configured period. You can
 force and verify a rotation with:
 
 ```bash
-npm run auth:database:rotate
-docker compose up -d --force-recreate api
+./ops dev database rotate-runtime
+./ops dev compose up -d --force-recreate api
 ```
 
 The API reads the database credential once during startup. Npgsql pooled
@@ -162,8 +170,8 @@ retrieval or PostgreSQL authentication fails.
 ## Security verification
 
 ```bash
-npm run auth:test-policy
-npm run auth:database:verify
+./ops dev auth test-policy
+./ops dev database verify
 ```
 
 The policy check confirms JWT signing and retrieval of the one runtime database

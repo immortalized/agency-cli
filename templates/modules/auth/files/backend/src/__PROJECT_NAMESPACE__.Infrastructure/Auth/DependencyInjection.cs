@@ -70,7 +70,12 @@ public static class DependencyInjection
                 IPermissionDefinitionProvider,
                 AuthPermissionDefinitionProvider>());
 
+        // Aggregates the definitions every installed module registered above.
+        services.AddSingleton<PermissionCatalog>();
+
         services.AddScoped<PermissionSeeder>();
+
+        services.AddScoped<UserSessionInvalidator>();
 
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<

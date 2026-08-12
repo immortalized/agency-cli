@@ -23,6 +23,7 @@ public sealed class AuthController(
     IPasswordHasher passwordHasher,
     IAccessTokenService accessTokenService,
     IRefreshTokenService refreshTokenService,
+    UserSessionInvalidator sessionInvalidator,
     IOptions<AuthOptions> authOptions)
     : ControllerBase
 {
@@ -138,11 +139,24 @@ public sealed class AuthController(
             PermissionSeeder.UserRoleName);
 
         var role = await dbContext.Set<Role>()
-            .SingleAsync(
+            .SingleOrDefaultAsync(
                 candidate =>
                     candidate.NormalizedName == userRoleName
                     && candidate.IsActive,
                 cancellationToken);
+
+        if (role is null)
+        {
+            return StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                new ProblemDetails
+                {
+                    Title = "Registration is temporarily unavailable.",
+                    Detail =
+                        $"The built-in '{PermissionSeeder.UserRoleName}' role is missing or inactive; permission seeding has not completed.",
+                    Status = StatusCodes.Status503ServiceUnavailable
+                });
+        }
 
         string passwordHash;
 
@@ -162,7 +176,7 @@ public sealed class AuthController(
 
         var user = new User(
             Guid.NewGuid(),
-            role.Id,
+            [role.Id],
             username,
             normalizedUsername,
             passwordHash,
@@ -178,7 +192,7 @@ public sealed class AuthController(
         // account follows the same normal login flow as every other user.
         return StatusCode(
             StatusCodes.Status201Created,
-            ToUserResponse(user, role.Name, []));
+            ToUserResponse(user, [role.Name], []));
     }
 
     [AllowAnonymous]
@@ -211,9 +225,10 @@ public sealed class AuthController(
 
         var storedToken = await dbContext.Set<RefreshToken>()
             .Include(token => token.User)
-                .ThenInclude(user => user.Role)
-                    .ThenInclude(role => role.RolePermissions)
-                        .ThenInclude(mapping => mapping.Permission)
+                .ThenInclude(user => user.UserRoles)
+                    .ThenInclude(assignment => assignment.Role)
+                        .ThenInclude(role => role.RolePermissions)
+                            .ThenInclude(mapping => mapping.Permission)
             .SingleOrDefaultAsync(
                 token => token.TokenHash == tokenHash,
                 cancellationToken);
@@ -228,9 +243,10 @@ public sealed class AuthController(
 
         if (!storedToken.IsActive(nowUtc))
         {
-            await RevokeFamilyAsync(
+            await sessionInvalidator.RevokeFamilyAsync(
                 storedToken.FamilyId,
                 "Refresh token reuse detected.",
+                RemoteIpAddress(),
                 nowUtc,
                 cancellationToken);
 
@@ -241,9 +257,10 @@ public sealed class AuthController(
 
         if (!storedToken.User.IsActive)
         {
-            await RevokeUserTokensAsync(
-                storedToken.UserId,
+            await sessionInvalidator.RevokeRefreshTokensAsync(
+                [storedToken.UserId],
                 "User is disabled.",
+                RemoteIpAddress(),
                 nowUtc,
                 cancellationToken);
 
@@ -301,9 +318,10 @@ public sealed class AuthController(
 
                 if (storedToken is not null)
                 {
-                    await RevokeFamilyAsync(
+                    await sessionInvalidator.RevokeFamilyAsync(
                         storedToken.FamilyId,
                         "User logout.",
+                        RemoteIpAddress(),
                         DateTimeOffset.UtcNow,
                         cancellationToken);
 
@@ -388,9 +406,10 @@ public sealed class AuthController(
         var nowUtc = DateTimeOffset.UtcNow;
         user.ChangePassword(passwordHash, nowUtc);
 
-        await RevokeUserTokensAsync(
-            user.Id,
+        await sessionInvalidator.RevokeRefreshTokensAsync(
+            [user.Id],
             "Password changed.",
+            RemoteIpAddress(),
             nowUtc,
             cancellationToken);
 
@@ -402,9 +421,10 @@ public sealed class AuthController(
 
     private IQueryable<User> UserWithAuthorization() =>
         dbContext.Set<User>()
-            .Include(user => user.Role)
-                .ThenInclude(role => role.RolePermissions)
-                    .ThenInclude(mapping => mapping.Permission);
+            .Include(user => user.UserRoles)
+                .ThenInclude(assignment => assignment.Role)
+                    .ThenInclude(role => role.RolePermissions)
+                        .ThenInclude(mapping => mapping.Permission);
 
     private async Task<AuthResponse> CreateAuthenticatedSessionAsync(
         User user,
@@ -413,6 +433,7 @@ public sealed class AuthController(
         CancellationToken cancellationToken,
         Guid? tokenId = null)
     {
+        var roles = GetRoleNames(user);
         var permissions = GetEffectivePermissions(user);
 
         var accessToken = await accessTokenService.CreateAsync(
@@ -420,7 +441,7 @@ public sealed class AuthController(
                 user.Id,
                 user.Username,
                 user.Email,
-                user.Role.Name,
+                roles,
                 permissions,
                 user.AuthVersion,
                 user.MustChangePassword),
@@ -448,9 +469,19 @@ public sealed class AuthController(
         return new AuthResponse(
             accessToken.Token,
             accessToken.ExpiresAtUtc,
-            ToUserResponse(user, user.Role.Name, permissions));
+            ToUserResponse(user, roles, permissions));
     }
 
+    private static IReadOnlyList<string> GetRoleNames(User user) =>
+        user.UserRoles
+            .Select(assignment => assignment.Role.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+    /// <summary>
+    /// The union of every assigned role's permissions, or nothing at all
+    /// while a forced password change is pending.
+    /// </summary>
     private static IReadOnlyList<string> GetEffectivePermissions(
         User user)
     {
@@ -459,8 +490,11 @@ public sealed class AuthController(
             return [];
         }
 
-        return user.Role.RolePermissions
+        return user.UserRoles
+            .SelectMany(assignment =>
+                assignment.Role.RolePermissions)
             .Select(mapping => mapping.Permission.Name)
+            .Distinct(StringComparer.Ordinal)
             .OrderBy(permission => permission, StringComparer.Ordinal)
             .ToArray();
     }
@@ -468,60 +502,23 @@ public sealed class AuthController(
     private static AuthUserResponse ToUserResponse(User user) =>
         ToUserResponse(
             user,
-            user.Role.Name,
+            GetRoleNames(user),
             GetEffectivePermissions(user));
 
     private static AuthUserResponse ToUserResponse(
         User user,
-        string role,
+        IReadOnlyList<string> roles,
         IReadOnlyList<string> permissions) =>
         new(
             user.Id,
             user.Username,
             user.Email,
-            role,
+            roles,
             permissions,
             user.MustChangePassword);
 
-    private async Task RevokeFamilyAsync(
-        Guid familyId,
-        string reason,
-        DateTimeOffset nowUtc,
-        CancellationToken cancellationToken)
-    {
-        var tokens = await dbContext.Set<RefreshToken>()
-            .Where(token => token.FamilyId == familyId)
-            .ToListAsync(cancellationToken);
-
-        foreach (var token in tokens.Where(
-                     token => token.IsActive(nowUtc)))
-        {
-            token.Revoke(
-                nowUtc,
-                HttpContext.Connection.RemoteIpAddress?.ToString(),
-                reason);
-        }
-    }
-
-    private async Task RevokeUserTokensAsync(
-        Guid userId,
-        string reason,
-        DateTimeOffset nowUtc,
-        CancellationToken cancellationToken)
-    {
-        var tokens = await dbContext.Set<RefreshToken>()
-            .Where(token => token.UserId == userId)
-            .ToListAsync(cancellationToken);
-
-        foreach (var token in tokens.Where(
-                     token => token.IsActive(nowUtc)))
-        {
-            token.Revoke(
-                nowUtc,
-                HttpContext.Connection.RemoteIpAddress?.ToString(),
-                reason);
-        }
-    }
+    private string? RemoteIpAddress() =>
+        HttpContext.Connection.RemoteIpAddress?.ToString();
 
     private async Task<bool> UserIdentityExistsAsync(
         string normalizedUsername,

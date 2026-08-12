@@ -2,7 +2,7 @@ namespace __PROJECT_NAMESPACE__.Domain.Auth;
 
 public sealed class Role
 {
-    private readonly List<User> _users = [];
+    private readonly List<UserRole> _userRoles = [];
     private readonly List<RolePermission> _rolePermissions = [];
 
     private Role()
@@ -14,6 +14,7 @@ public sealed class Role
         string name,
         string normalizedName,
         string displayName,
+        string? description,
         bool isSystem,
         DateTimeOffset createdAtUtc)
     {
@@ -32,6 +33,7 @@ public sealed class Role
         Name = name;
         NormalizedName = normalizedName;
         DisplayName = displayName;
+        Description = NormalizeDescription(description);
         IsSystem = isSystem;
         IsActive = true;
         CreatedAtUtc = createdAtUtc;
@@ -46,6 +48,8 @@ public sealed class Role
 
     public string DisplayName { get; private set; } = null!;
 
+    public string? Description { get; private set; }
+
     public bool IsSystem { get; private set; }
 
     public bool IsActive { get; private set; }
@@ -54,9 +58,50 @@ public sealed class Role
 
     public DateTimeOffset UpdatedAtUtc { get; private set; }
 
-    public IReadOnlyCollection<User> Users
-        => _users.AsReadOnly();
+    public IReadOnlyCollection<UserRole> UserRoles
+        => _userRoles.AsReadOnly();
 
     public IReadOnlyCollection<RolePermission> RolePermissions
         => _rolePermissions.AsReadOnly();
+
+    public void UpdateDetails(
+        string name,
+        string normalizedName,
+        string displayName,
+        string? description,
+        DateTimeOffset changedAtUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(normalizedName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+
+        // Built-in role names are looked up by the seeder and by the
+        // registration flow, so only their presentation may change.
+        if (IsSystem
+            && !string.Equals(
+                NormalizedName,
+                normalizedName,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Built-in roles cannot be renamed.");
+        }
+
+        Name = name;
+        NormalizedName = normalizedName;
+        DisplayName = displayName;
+        Description = NormalizeDescription(description);
+        UpdatedAtUtc = changedAtUtc;
+    }
+
+    public void Touch(DateTimeOffset changedAtUtc)
+    {
+        UpdatedAtUtc = changedAtUtc;
+    }
+
+    private static string? NormalizeDescription(
+        string? description) =>
+        string.IsNullOrWhiteSpace(description)
+            ? null
+            : description.Trim();
 }

@@ -9,8 +9,4 @@ public sealed record AdminUpdateUserRequest(
 
     [param: EmailAddress]
     [param: MaxLength(320)]
-    string? Email,
-
-    [param: Required]
-    [param: MaxLength(64)]
-    string Role);
+    string? Email);

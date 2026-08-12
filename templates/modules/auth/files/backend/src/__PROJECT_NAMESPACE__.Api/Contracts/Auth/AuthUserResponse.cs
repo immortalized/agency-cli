@@ -4,6 +4,6 @@ public sealed record AuthUserResponse(
     Guid Id,
     string Username,
     string? Email,
-    string Role,
+    IReadOnlyList<string> Roles,
     IReadOnlyList<string> Permissions,
     bool MustChangePassword);

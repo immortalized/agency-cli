@@ -17,7 +17,8 @@ namespace __PROJECT_NAMESPACE__.Api.Controllers;
 public sealed class AdminUsersController(
     AppDbContext dbContext,
     IPasswordHasher passwordHasher,
-    ITemporaryPasswordGenerator temporaryPasswordGenerator)
+    ITemporaryPasswordGenerator temporaryPasswordGenerator,
+    UserSessionInvalidator sessionInvalidator)
     : ControllerBase
 {
     [HttpGet]
@@ -74,13 +75,30 @@ public sealed class AdminUsersController(
             return IdentityConflict();
         }
 
-        var role = await FindRoleAsync(
-            request.Role ?? PermissionSeeder.UserRoleName,
+        var requestedRoles =
+            NormalizeRoleNames(request.Roles);
+
+        // Choosing the roles of a new account is privilege assignment, not
+        // account creation, so it needs the same permission as changing the
+        // roles of an existing account.
+        if (requestedRoles.Count > 0
+            && !CallerHasPermission(AuthPermissions.UsersAssignRoles))
+        {
+            return MissingAssignRolesPermission();
+        }
+
+        var roles = await ResolveRolesAsync(
+            requestedRoles.Count > 0
+                ? requestedRoles
+                : [
+                    AuthNormalizer.NormalizeUsername(
+                        PermissionSeeder.UserRoleName)
+                ],
             cancellationToken);
 
-        if (role is null)
+        if (roles is null)
         {
-            return InvalidRole();
+            return InvalidRoles();
         }
 
         var temporaryPassword =
@@ -90,7 +108,7 @@ public sealed class AdminUsersController(
 
         var user = new User(
             Guid.NewGuid(),
-            role.Id,
+            roles.Select(role => role.Id).ToArray(),
             identity.Value.Username,
             identity.Value.NormalizedUsername,
             passwordHasher.Hash(temporaryPassword),
@@ -102,7 +120,7 @@ public sealed class AdminUsersController(
         dbContext.Set<User>().Add(user);
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        user = await UserQuery()
+        var created = await UserQuery()
             .AsNoTracking()
             .SingleAsync(
                 candidate => candidate.Id == user.Id,
@@ -110,9 +128,9 @@ public sealed class AdminUsersController(
 
         return CreatedAtAction(
             nameof(GetById),
-            new { id = user.Id },
+            new { id = created.Id },
             new AdminCreateUserResponse(
-                ToResponse(user),
+                ToResponse(created),
                 temporaryPassword));
     }
 
@@ -151,15 +169,6 @@ public sealed class AdminUsersController(
             return IdentityConflict();
         }
 
-        var role = await FindRoleAsync(
-            request.Role,
-            cancellationToken);
-
-        if (role is null)
-        {
-            return InvalidRole();
-        }
-
         var nowUtc = DateTimeOffset.UtcNow;
 
         user.UpdateProfile(
@@ -169,23 +178,89 @@ public sealed class AdminUsersController(
             identity.Value.NormalizedEmail,
             nowUtc);
 
-        user.ChangeRole(role.Id, nowUtc);
-
-        await RevokeUserTokensAsync(
-            user.Id,
-            "User authorization data changed.",
+        await sessionInvalidator.RevokeRefreshTokensAsync(
+            [user.Id],
+            "User profile changed.",
+            RemoteIpAddress(),
             nowUtc,
             cancellationToken);
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        user = await UserQuery()
+        var updated = await UserQuery()
             .AsNoTracking()
             .SingleAsync(
                 candidate => candidate.Id == id,
                 cancellationToken);
 
-        return Ok(ToResponse(user));
+        return Ok(ToResponse(updated));
+    }
+
+    [HttpPut("{id:guid}/roles")]
+    [HasPermission(AuthPermissions.UsersAssignRoles)]
+    public async Task<ActionResult<AdminUserResponse>> AssignRoles(
+        Guid id,
+        AssignUserRolesRequest request,
+        CancellationToken cancellationToken)
+    {
+        var user = await UserQuery()
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == id,
+                cancellationToken);
+
+        if (user is null)
+        {
+            return NotFound();
+        }
+
+        if (id == CurrentUserId())
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title =
+                    "Administrators cannot change their own role assignment.",
+                Detail =
+                    "Ask another administrator to make this change so an account cannot escalate or lock out itself.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        var roles = await ResolveRolesAsync(
+            NormalizeRoleNames(request.Roles),
+            cancellationToken);
+
+        if (roles is null)
+        {
+            return InvalidRoles();
+        }
+
+        var nowUtc = DateTimeOffset.UtcNow;
+
+        var changed = user.ReplaceRoles(
+            roles.Select(role => role.Id).ToArray(),
+            nowUtc);
+
+        if (changed)
+        {
+            // ReplaceRoles already incremented the auth version, so the
+            // outstanding refresh tokens are all that is left to retire.
+            await sessionInvalidator.RevokeRefreshTokensAsync(
+                [user.Id],
+                "User role assignment changed.",
+                RemoteIpAddress(),
+                nowUtc,
+                cancellationToken);
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        var updated = await UserQuery()
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == id,
+                cancellationToken);
+
+        return Ok(ToResponse(updated));
     }
 
     [HttpPost("{id:guid}/disable")]
@@ -216,9 +291,10 @@ public sealed class AdminUsersController(
         var nowUtc = DateTimeOffset.UtcNow;
         user.Disable(nowUtc);
 
-        await RevokeUserTokensAsync(
-            id,
+        await sessionInvalidator.RevokeRefreshTokensAsync(
+            [id],
             "User disabled.",
+            RemoteIpAddress(),
             nowUtc,
             cancellationToken);
 
@@ -273,9 +349,10 @@ public sealed class AdminUsersController(
             passwordHasher.Hash(temporaryPassword),
             nowUtc);
 
-        await RevokeUserTokensAsync(
-            id,
+        await sessionInvalidator.RevokeRefreshTokensAsync(
+            [id],
             "Password reset by administrator.",
+            RemoteIpAddress(),
             nowUtc,
             cancellationToken);
 
@@ -288,26 +365,51 @@ public sealed class AdminUsersController(
 
     private IQueryable<User> UserQuery() =>
         dbContext.Set<User>()
-            .Include(user => user.Role)
-                .ThenInclude(role => role.RolePermissions)
-                    .ThenInclude(mapping => mapping.Permission);
+            .Include(user => user.UserRoles)
+                .ThenInclude(assignment => assignment.Role)
+                    .ThenInclude(role => role.RolePermissions)
+                        .ThenInclude(mapping => mapping.Permission);
 
-    private async Task<Role?> FindRoleAsync(
-        string roleName,
-        CancellationToken cancellationToken)
+    private static IReadOnlyList<string> NormalizeRoleNames(
+        IReadOnlyList<string>? names)
     {
-        if (string.IsNullOrWhiteSpace(roleName))
+        if (names is null)
         {
-            return null;
+            return [];
         }
 
-        var normalized = AuthNormalizer.NormalizeUsername(roleName);
+        return names
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(AuthNormalizer.NormalizeUsername)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
 
-        return await dbContext.Set<Role>()
-            .SingleOrDefaultAsync(
-                role => role.NormalizedName == normalized
-                    && role.IsActive,
-                cancellationToken);
+    /// <summary>
+    /// Resolves normalized role names to active roles. Returns <c>null</c>
+    /// when any requested role is missing or inactive, so a typo can never
+    /// silently strip a user's authorization.
+    /// </summary>
+    private async Task<IReadOnlyList<Role>?> ResolveRolesAsync(
+        IReadOnlyList<string> normalizedNames,
+        CancellationToken cancellationToken)
+    {
+        if (normalizedNames.Count == 0)
+        {
+            // An explicitly empty set is valid: the user keeps their account
+            // but holds no permissions.
+            return [];
+        }
+
+        var roles = await dbContext.Set<Role>()
+            .Where(role =>
+                normalizedNames.Contains(role.NormalizedName)
+                && role.IsActive)
+            .ToListAsync(cancellationToken);
+
+        return roles.Count == normalizedNames.Count
+            ? roles
+            : null;
     }
 
     private async Task<bool> IdentityExistsAsync(
@@ -353,25 +455,13 @@ public sealed class AdminUsersController(
             AuthNormalizer.NormalizeEmail(trimmedEmail));
     }
 
-    private async Task RevokeUserTokensAsync(
-        Guid userId,
-        string reason,
-        DateTimeOffset nowUtc,
-        CancellationToken cancellationToken)
-    {
-        var tokens = await dbContext.Set<RefreshToken>()
-            .Where(token => token.UserId == userId)
-            .ToListAsync(cancellationToken);
+    private bool CallerHasPermission(string permission) =>
+        User.HasClaim(
+            AuthClaimNames.Permission,
+            permission);
 
-        foreach (var token in tokens.Where(
-                     token => token.IsActive(nowUtc)))
-        {
-            token.Revoke(
-                nowUtc,
-                HttpContext.Connection.RemoteIpAddress?.ToString(),
-                reason);
-        }
-    }
+    private string? RemoteIpAddress() =>
+        HttpContext.Connection.RemoteIpAddress?.ToString();
 
     private Guid CurrentUserId()
     {
@@ -388,9 +478,15 @@ public sealed class AdminUsersController(
             user.Id,
             user.Username,
             user.Email,
-            user.Role.Name,
-            user.Role.RolePermissions
+            user.UserRoles
+                .Select(assignment => assignment.Role.Name)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray(),
+            user.UserRoles
+                .SelectMany(assignment =>
+                    assignment.Role.RolePermissions)
                 .Select(mapping => mapping.Permission.Name)
+                .Distinct(StringComparer.Ordinal)
                 .OrderBy(permission => permission, StringComparer.Ordinal)
                 .ToArray(),
             user.IsActive,
@@ -408,10 +504,25 @@ public sealed class AdminUsersController(
             Status = StatusCodes.Status409Conflict
         });
 
-    private static BadRequestObjectResult InvalidRole() =>
+    private static BadRequestObjectResult InvalidRoles() =>
         new(new ProblemDetails
         {
-            Title = "The selected role is invalid or inactive.",
+            Title = "One or more selected roles are invalid or inactive.",
+            Detail =
+                "GET /api/admin/roles lists every assignable role.",
             Status = StatusCodes.Status400BadRequest
         });
+
+    private static ObjectResult MissingAssignRolesPermission() =>
+        new(new ProblemDetails
+        {
+            Title =
+                $"The '{AuthPermissions.UsersAssignRoles}' permission is required to choose roles.",
+            Detail =
+                "Create the account without roles, or ask for the role-assignment permission.",
+            Status = StatusCodes.Status403Forbidden
+        })
+        {
+            StatusCode = StatusCodes.Status403Forbidden
+        };
 }

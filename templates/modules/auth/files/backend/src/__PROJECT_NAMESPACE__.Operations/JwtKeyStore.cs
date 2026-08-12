@@ -14,10 +14,11 @@ public static class JwtKeyStore
         ".auth-key-operation.lock";
 
     private const string CompletionMarkerFileName =
-        ".auth-provisioning.complete";
+        AuthProvisioningMarkers.CompletionFileName;
 
     private const string BootstrapRetirementMarkerFileName =
-        ".postgres-bootstrap-retirement.pending";
+        AuthProvisioningMarkers
+            .BootstrapRetirementPendingFileName;
 
     private static readonly JsonSerializerOptions
         JsonOptions = new()

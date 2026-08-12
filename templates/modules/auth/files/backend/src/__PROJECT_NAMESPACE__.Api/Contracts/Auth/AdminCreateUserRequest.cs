@@ -11,5 +11,6 @@ public sealed record AdminCreateUserRequest(
     [param: MaxLength(320)]
     string? Email,
 
-    [param: MaxLength(64)]
-    string? Role);
+    // Optional. Omit to receive only the built-in default role. Supplying any
+    // role additionally requires the 'users.assign-roles' permission.
+    IReadOnlyList<string>? Roles);

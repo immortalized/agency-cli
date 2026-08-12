@@ -12,12 +12,6 @@ public sealed class InitialAdminCreator(
     AppDbContext dbContext,
     IPasswordHasher passwordHasher)
 {
-    private const string AdministratorRoleName =
-        "administrator";
-
-    private const string AdministratorDisplayName =
-        "Administrator";
-
     public async Task<InitialAdminResult> CreateAsync(
         string username,
         string? email,
@@ -40,9 +34,12 @@ public sealed class InitialAdminCreator(
             AuthNormalizer.NormalizeEmail(
                 trimmedEmail);
 
+        // Seed from every permission provider the installed modules ship, not
+        // just the auth module's own, so the built-in administrator role holds
+        // the complete installed permission set the moment it is created.
         var permissionSeeder = new PermissionSeeder(
             dbContext,
-            [new AuthPermissionDefinitionProvider()]);
+            PermissionDefinitionProviderLoader.CreateCatalog());
 
         await permissionSeeder.SeedAsync(
             cancellationToken);
@@ -66,34 +63,26 @@ public sealed class InitialAdminCreator(
 
         var normalizedRoleName =
             AuthNormalizer.NormalizeUsername(
-                AdministratorRoleName);
+                PermissionSeeder.AdministratorRoleName);
 
+        // Seeding above already created this role and granted it every
+        // installed permission, so it is only looked up here.
         var role = await dbContext.Set<Role>()
             .SingleOrDefaultAsync(
                 candidate =>
                     candidate.NormalizedName ==
                     normalizedRoleName,
-                cancellationToken);
+                cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Permission seeding did not create the built-in administrator role.");
 
-        var nowUtc = DateTimeOffset.UtcNow;
-
-        if (role is null)
-        {
-            role = new Role(
-                Guid.NewGuid(),
-                AdministratorRoleName,
-                normalizedRoleName,
-                AdministratorDisplayName,
-                true,
-                nowUtc);
-
-            dbContext.Set<Role>().Add(role);
-        }
-        else if (!role.IsSystem || !role.IsActive)
+        if (!role.IsSystem || !role.IsActive)
         {
             throw new InvalidOperationException(
                 "The existing administrator role is not a valid active system role.");
         }
+
+        var nowUtc = DateTimeOffset.UtcNow;
 
         var temporaryPassword =
             TemporaryPasswordGenerator.Generate();
@@ -104,7 +93,7 @@ public sealed class InitialAdminCreator(
 
         var user = new User(
             Guid.NewGuid(),
-            role.Id,
+            [role.Id],
             trimmedUsername,
             normalizedUsername,
             passwordHash,

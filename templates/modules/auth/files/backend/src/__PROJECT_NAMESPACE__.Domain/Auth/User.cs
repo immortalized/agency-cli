@@ -3,6 +3,7 @@ namespace __PROJECT_NAMESPACE__.Domain.Auth;
 public sealed class User
 {
     private readonly List<RefreshToken> _refreshTokens = [];
+    private readonly List<UserRole> _userRoles = [];
 
     private User()
     {
@@ -10,7 +11,7 @@ public sealed class User
 
     public User(
         Guid id,
-        Guid roleId,
+        IReadOnlyCollection<Guid> roleIds,
         string username,
         string normalizedUsername,
         string passwordHash,
@@ -26,12 +27,7 @@ public sealed class User
                 nameof(id));
         }
 
-        if (roleId == Guid.Empty)
-        {
-            throw new ArgumentException(
-                "Role id cannot be empty.",
-                nameof(roleId));
-        }
+        ArgumentNullException.ThrowIfNull(roleIds);
 
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
         ArgumentException.ThrowIfNullOrWhiteSpace(normalizedUsername);
@@ -53,7 +49,6 @@ public sealed class User
         }
 
         Id = id;
-        RoleId = roleId;
         Username = username;
         NormalizedUsername = normalizedUsername;
         Email = email;
@@ -64,13 +59,22 @@ public sealed class User
         AuthVersion = 1;
         CreatedAtUtc = createdAtUtc;
         UpdatedAtUtc = createdAtUtc;
+
+        foreach (var roleId in roleIds.Distinct())
+        {
+            if (roleId == Guid.Empty)
+            {
+                throw new ArgumentException(
+                    "Role id cannot be empty.",
+                    nameof(roleIds));
+            }
+
+            _userRoles.Add(
+                new UserRole(id, roleId, createdAtUtc));
+        }
     }
 
     public Guid Id { get; private set; }
-
-    public Guid RoleId { get; private set; }
-
-    public Role Role { get; private set; } = null!;
 
     public string Username { get; private set; } = null!;
 
@@ -100,6 +104,9 @@ public sealed class User
 
     public IReadOnlyCollection<RefreshToken> RefreshTokens
         => _refreshTokens.AsReadOnly();
+
+    public IReadOnlyCollection<UserRole> UserRoles
+        => _userRoles.AsReadOnly();
 
     public void ChangePassword(
         string passwordHash,
@@ -166,23 +173,58 @@ public sealed class User
         UpdatedAtUtc = changedAtUtc;
     }
 
-    public void ChangeRole(
-        Guid roleId,
+    /// <summary>
+    /// Replaces the user's role assignments. Returns <c>true</c> when the
+    /// assignment actually changed, in which case the auth version was
+    /// incremented and every previously issued access token is now stale.
+    /// The <see cref="UserRoles"/> navigation must be loaded before calling.
+    /// </summary>
+    public bool ReplaceRoles(
+        IReadOnlyCollection<Guid> roleIds,
         DateTimeOffset changedAtUtc)
     {
-        if (roleId == Guid.Empty)
+        ArgumentNullException.ThrowIfNull(roleIds);
+
+        var desired = new HashSet<Guid>(roleIds);
+
+        if (desired.Contains(Guid.Empty))
         {
             throw new ArgumentException(
                 "Role id cannot be empty.",
-                nameof(roleId));
+                nameof(roleIds));
         }
 
-        if (RoleId == roleId)
+        var current = _userRoles
+            .Select(assignment => assignment.RoleId)
+            .ToHashSet();
+
+        if (desired.SetEquals(current))
         {
-            return;
+            return false;
         }
 
-        RoleId = roleId;
+        _userRoles.RemoveAll(
+            assignment => !desired.Contains(assignment.RoleId));
+
+        foreach (var roleId in desired.Where(
+                     roleId => !current.Contains(roleId)))
+        {
+            _userRoles.Add(
+                new UserRole(Id, roleId, changedAtUtc));
+        }
+
+        AuthVersion++;
+        UpdatedAtUtc = changedAtUtc;
+        return true;
+    }
+
+    /// <summary>
+    /// Increments the auth version without any other state change, so access
+    /// tokens issued before an out-of-band authorization change (such as a
+    /// role's permission set being edited) stop validating immediately.
+    /// </summary>
+    public void InvalidateSessions(DateTimeOffset changedAtUtc)
+    {
         AuthVersion++;
         UpdatedAtUtc = changedAtUtc;
     }

@@ -4,7 +4,7 @@ public sealed record AdminUserResponse(
     Guid Id,
     string Username,
     string? Email,
-    string Role,
+    IReadOnlyList<string> Roles,
     IReadOnlyList<string> Permissions,
     bool IsActive,
     bool MustChangePassword,

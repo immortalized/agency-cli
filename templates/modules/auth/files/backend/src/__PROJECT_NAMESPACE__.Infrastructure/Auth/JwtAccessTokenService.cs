@@ -61,7 +61,7 @@ public sealed class JwtAccessTokenService(
             Guid.NewGuid().ToString(),
             nowUtc.ToUnixTimeSeconds(),
             subject.Email,
-            subject.Role,
+            subject.Roles,
             subject.Permissions,
             subject.AuthVersion,
             subject.MustChangePassword,
@@ -137,8 +137,10 @@ public sealed class JwtAccessTokenService(
         [property: JsonPropertyName("email")]
         string? Email,
 
+        // Serialized as a JSON array so a user can hold several roles; the
+        // JWT handler expands each element into its own "role" claim.
         [property: JsonPropertyName(AuthClaimNames.Role)]
-        string Role,
+        IReadOnlyCollection<string> Roles,
 
         [property: JsonPropertyName(AuthClaimNames.Permission)]
         IReadOnlyCollection<string> Permissions,

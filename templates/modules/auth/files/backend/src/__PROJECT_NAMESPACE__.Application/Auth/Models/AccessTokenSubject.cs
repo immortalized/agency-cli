@@ -4,7 +4,7 @@ public sealed record AccessTokenSubject(
     Guid UserId,
     string Username,
     string? Email,
-    string Role,
+    IReadOnlyCollection<string> Roles,
     IReadOnlyCollection<string> Permissions,
     long AuthVersion,
     bool MustChangePassword);

@@ -103,7 +103,9 @@ try
         diagnosticOptions.MigratorTokenFile,
         diagnosticOptions.JwtRotationTokenFile,
         diagnosticOptions.DatabaseRotationTokenFile,
-        Path.Combine(stateDirectory, ".auth-provisioning.complete")
+        Path.Combine(
+            stateDirectory,
+            AuthProvisioningMarkers.CompletionFileName)
     })
     {
         File.WriteAllText(path, "present");

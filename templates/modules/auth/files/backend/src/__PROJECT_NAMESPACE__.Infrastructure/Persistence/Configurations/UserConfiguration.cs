@@ -17,9 +17,6 @@ public sealed class UserConfiguration
         builder.Property(user => user.Id)
             .ValueGeneratedNever();
 
-        builder.Property(user => user.RoleId)
-            .IsRequired();
-
         builder.Property(user => user.Username)
             .HasMaxLength(64)
             .IsRequired();
@@ -64,16 +61,21 @@ public sealed class UserConfiguration
             .HasDatabaseName(
                 "ux_auth_users_normalized_email");
 
-        builder.HasIndex(user => user.RoleId)
-            .HasDatabaseName(
-                "ix_auth_users_role_id");
-
         builder.HasMany(user => user.RefreshTokens)
             .WithOne(token => token.User)
             .HasForeignKey(token => token.UserId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        builder.HasMany(user => user.UserRoles)
+            .WithOne(assignment => assignment.User)
+            .HasForeignKey(assignment => assignment.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         builder.Navigation(user => user.RefreshTokens)
+            .UsePropertyAccessMode(
+                PropertyAccessMode.Field);
+
+        builder.Navigation(user => user.UserRoles)
             .UsePropertyAccessMode(
                 PropertyAccessMode.Field);
     }

@@ -12,6 +12,15 @@ public static class OperationsProgram
         ArgumentNullException.ThrowIfNull(args);
         try
         {
+            if (args is not (["help"] or []))
+            {
+                // Enforced here, not in the host-side 'ops' wrapper, so a
+                // hand-written 'docker compose ... -f
+                // compose.production.bootstrap.yaml ...' is refused too.
+                BootstrapLifecycle
+                    .EnsureBootstrapOverlayIsPermitted(args);
+            }
+
             return args switch
             {
                 ["auth", "init"] or ["keys", "init"] => await InitializeAuthAsync(),
@@ -115,6 +124,7 @@ public static class OperationsProgram
             GetKeyDirectory(),
             OpenBaoToolOptions.FromEnvironment(string.Empty));
         Console.WriteLine($"Auth provisioning: {provisioning.Message}");
+        Console.WriteLine($"Bootstrap lifecycle: {BootstrapLifecycle.DescribeState()}");
         return material.IsUsable && provisioning.IsComplete ? 0 : 2;
     }
 
@@ -277,7 +287,13 @@ public static class OperationsProgram
               database verify        Verify least-privilege runtime database access.
               database rotate-runtime Rotate the OpenBao-managed runtime credential.
 
-            Legacy keys/users/database aliases remain accepted for existing npm scripts.
+            These are the commands the host-side './ops' wrapper forwards here. Run './ops help'
+            on the host for the full environment/subsystem grammar and the Compose passthrough.
+
+            In production, every command is refused when it is invoked through the bootstrap
+            Compose overlay after bootstrap already completed, however that overlay is applied.
+
+            Legacy keys/users/database aliases remain accepted.
             """);
         return 0;
     }

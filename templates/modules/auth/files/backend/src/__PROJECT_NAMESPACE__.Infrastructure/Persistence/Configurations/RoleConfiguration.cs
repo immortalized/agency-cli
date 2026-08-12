@@ -29,6 +29,9 @@ public sealed class RoleConfiguration
             .HasMaxLength(128)
             .IsRequired();
 
+        builder.Property(role => role.Description)
+            .HasMaxLength(256);
+
         builder.Property(role => role.IsSystem)
             .IsRequired();
 
@@ -46,15 +49,20 @@ public sealed class RoleConfiguration
             .HasDatabaseName(
                 "ux_auth_roles_normalized_name");
 
-        builder.HasMany(role => role.Users)
-            .WithOne(user => user.Role)
-            .HasForeignKey(user => user.RoleId)
+        // Deleting a role that still has members is refused by the API with a
+        // 409; RESTRICT keeps that invariant enforced at the database level.
+        builder.HasMany(role => role.UserRoles)
+            .WithOne(assignment => assignment.Role)
+            .HasForeignKey(assignment => assignment.RoleId)
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasMany(role => role.RolePermissions)
             .WithOne(rolePermission => rolePermission.Role)
             .HasForeignKey(rolePermission => rolePermission.RoleId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Navigation(role => role.UserRoles)
+            .UsePropertyAccessMode(PropertyAccessMode.Field);
 
         builder.Navigation(role => role.RolePermissions)
             .UsePropertyAccessMode(PropertyAccessMode.Field);
