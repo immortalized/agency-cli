@@ -221,7 +221,14 @@ public static class OperationsProgram
 
     private static string ReadOperatorToken()
     {
-        var bytes = ConsoleSecretReader.ReadRequired("OpenBao operation-specific token: ");
+        Console.WriteLine(
+            """
+            No stored resumable provisioning credential was found. This can happen only when the first bootstrap was interrupted before OpenBao created and the tool persisted its 24-hour least-privilege token.
+
+            To resume without recreating storage, first use OpenBao's authenticated root-generation workflow with the configured unseal quorum to obtain a temporary administrative token, then enter that token below. If that recovery material is unavailable, this deployment cannot be resumed automatically; destroy and recreate this deployment's OpenBao and database volumes to start a genuinely fresh bootstrap.
+            """);
+        var bytes = ConsoleSecretReader.ReadRequired(
+            "OpenBao temporary administrative recovery token: ");
         try
         {
             // HttpRequestHeaders accepts only strings. The UTF-8 input buffer is

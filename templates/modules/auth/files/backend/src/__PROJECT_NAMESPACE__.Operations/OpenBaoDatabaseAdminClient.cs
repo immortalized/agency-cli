@@ -29,13 +29,10 @@ public sealed class OpenBaoDatabaseAdminClient(
             CancellationToken cancellationToken)
     {
         var missing = new List<string>();
-        using var mountsResponse = await SendAsync(
+        using var mountsResponse = await SendAdminAsync(
             HttpMethod.Get,
             "v1/sys/mounts",
             null,
-            cancellationToken);
-        await EnsureSuccessAsync(
-            mountsResponse,
             "read enabled secrets engines",
             cancellationToken);
         using var mounts = await mountsResponse.Content
@@ -89,7 +86,7 @@ public sealed class OpenBaoDatabaseAdminClient(
         await EnsureDatabaseEngineEnabledAsync(
             cancellationToken);
 
-        using var configureResponse = await SendAsync(
+        using var configureResponse = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/{Mount}/config/{ConnectionName}",
             new
@@ -111,28 +108,20 @@ public sealed class OpenBaoDatabaseAdminClient(
                 max_idle_connections = 2,
                 max_connection_lifetime = "30s"
             },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            configureResponse,
             "configure the PostgreSQL database connection",
             cancellationToken);
 
         // OpenBao replaces the short-lived bootstrap value
         // above and becomes the sole owner of the management
         // role's current password.
-        using var rotateRootResponse = await SendAsync(
+        using var rotateRootResponse = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/{Mount}/rotate-root/{ConnectionName}",
             new { },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            rotateRootResponse,
             "rotate the PostgreSQL management credential",
             cancellationToken);
 
-        using var staticRoleResponse = await SendAsync(
+        using var staticRoleResponse = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/{Mount}/static-roles/{StaticRoleName}",
             new
@@ -149,14 +138,10 @@ public sealed class OpenBaoDatabaseAdminClient(
                     "ALTER ROLE \"{{name}}\" WITH PASSWORD '{{password}}'"
                 }
             },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            staticRoleResponse,
             "configure the runtime PostgreSQL static role",
             cancellationToken);
 
-        using var migratorRoleResponse = await SendAsync(
+        using var migratorRoleResponse = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/{Mount}/static-roles/{MigratorStaticRoleName}",
             new
@@ -170,10 +155,6 @@ public sealed class OpenBaoDatabaseAdminClient(
                     "ALTER ROLE \"{{name}}\" WITH PASSWORD '{{password}}'"
                 }
             },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            migratorRoleResponse,
             "configure the migrator PostgreSQL static role",
             cancellationToken);
 
@@ -191,14 +172,10 @@ public sealed class OpenBaoDatabaseAdminClient(
     public async Task RotateRuntimeRoleAsync(
         CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/{Mount}/rotate-role/{StaticRoleName}",
             new { },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            response,
             "rotate the runtime PostgreSQL credential",
             cancellationToken);
     }
@@ -225,14 +202,10 @@ public sealed class OpenBaoDatabaseAdminClient(
             string purpose,
             CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Get,
             $"v1/{Mount}/static-creds/{roleName}",
             null,
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            response,
             $"read the {purpose} PostgreSQL credential",
             cancellationToken);
 
@@ -272,12 +245,12 @@ public sealed class OpenBaoDatabaseAdminClient(
         string operation,
         CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/{Mount}/rotate-role/{roleName}",
             new { },
+            operation,
             cancellationToken);
-        await EnsureSuccessAsync(response, operation, cancellationToken);
     }
 
     private async Task AddIfMissingAsync(
@@ -286,21 +259,18 @@ public sealed class OpenBaoDatabaseAdminClient(
         ICollection<string> missing,
         CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Get,
             path,
             null,
-            cancellationToken);
+            $"read provisioning state '{description}'",
+            cancellationToken,
+            allowNotFound: true);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             missing.Add(description);
             return;
         }
-
-        await EnsureSuccessAsync(
-            response,
-            $"read provisioning state '{description}'",
-            cancellationToken);
     }
 
     private async Task EnsureDatabaseEngineEnabledAsync(
@@ -405,6 +375,44 @@ public sealed class OpenBaoDatabaseAdminClient(
                 "The OpenBao database administration request could not be completed.",
                 exception);
         }
+    }
+
+    private async Task<HttpResponseMessage> SendAdminAsync(
+        HttpMethod method,
+        string path,
+        object? body,
+        string operation,
+        CancellationToken cancellationToken,
+        bool allowNotFound = false)
+    {
+        return await OpenBaoAdminRetry.ExecuteAsync(
+            async retryCancellationToken =>
+            {
+                var response = await SendAsync(
+                    method,
+                    path,
+                    body,
+                    retryCancellationToken);
+                try
+                {
+                    if (!allowNotFound
+                        || response.StatusCode != HttpStatusCode.NotFound)
+                    {
+                        await EnsureSuccessAsync(
+                            response,
+                            operation,
+                            retryCancellationToken);
+                    }
+                    return response;
+                }
+                catch
+                {
+                    response.Dispose();
+                    throw;
+                }
+            },
+            $"{operation} while Raft leadership settles",
+            cancellationToken);
     }
 
     private static async Task EnsureSuccessAsync(

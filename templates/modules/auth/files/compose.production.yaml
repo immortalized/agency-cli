@@ -99,6 +99,8 @@ services:
       - ALL
 
   api:
+    image: __PROJECT_SLUG__-production-api:latest
+    pull_policy: build
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -150,6 +152,8 @@ services:
       - ALL
 
   frontend:
+    image: __PROJECT_SLUG__-production-frontend:latest
+    pull_policy: build
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -161,7 +165,7 @@ services:
     environment:
       API_BASE_URL: http://api:8080
     ports:
-      - "3000:3000"
+      - "80:3000"
     networks:
       - application
       - public
@@ -181,6 +185,8 @@ services:
 
   operations:
     profiles: ["tools"]
+    image: __PROJECT_SLUG__-production-operations:latest
+    pull_policy: build
     build:
       context: ./backend
       dockerfile: Operations.Dockerfile

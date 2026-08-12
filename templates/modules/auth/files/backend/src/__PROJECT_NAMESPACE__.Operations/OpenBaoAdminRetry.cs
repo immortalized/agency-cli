@@ -116,6 +116,8 @@ internal static class OpenBaoAdminRetry
         return Contains(responseBody, "cannot write to readonly storage")
             || Contains(responseBody, "read-only storage")
             || Contains(responseBody, "leadership lost")
+            || Contains(responseBody, "local node not active")
+            || Contains(responseBody, "active cluster node not found")
             || Contains(responseBody, "no active node")
             || Contains(responseBody, "not the active node")
             || Contains(responseBody, "standby node");

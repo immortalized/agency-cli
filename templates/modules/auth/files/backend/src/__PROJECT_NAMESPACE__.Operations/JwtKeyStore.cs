@@ -245,7 +245,7 @@ public static class JwtKeyStore
             : $"missing {string.Join(", ", missing)}";
         var resume = File.Exists(paths.ProvisioningTokenFile)
             ? " A short-lived provisioning credential is available; run 'auth init' to resume."
-            : " Run 'auth init' with an operator-supplied administrative token to repair it.";
+            : " No resumable provisioning credential was persisted; recovery requires a temporary administrative token obtained through OpenBao's authenticated root-generation workflow, or recreation of this deployment's OpenBao and database volumes.";
         return new AuthProvisioningDiagnostic(
             false,
             $"Incomplete: {details}.{resume}");

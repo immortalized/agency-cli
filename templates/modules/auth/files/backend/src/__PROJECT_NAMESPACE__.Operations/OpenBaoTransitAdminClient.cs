@@ -90,22 +90,19 @@ public sealed class OpenBaoTransitAdminClient(
         ReadKeyAsync(
             CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Get,
             KeyPath,
             null,
-            cancellationToken);
+            "read the Transit signing key",
+            cancellationToken,
+            allowNotFound: true);
 
         if (response.StatusCode ==
             HttpStatusCode.NotFound)
         {
             return null;
         }
-
-        await EnsureSuccessAsync(
-            response,
-            "read the Transit signing key",
-            cancellationToken);
 
         using var document = await ReadJsonAsync(
             response,
@@ -117,7 +114,7 @@ public sealed class OpenBaoTransitAdminClient(
     public async Task CreateKeyAsync(
         CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             KeyPath,
             new
@@ -126,10 +123,6 @@ public sealed class OpenBaoTransitAdminClient(
                 exportable = false,
                 allow_plaintext_backup = false
             },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            response,
             "create the Transit RSA-3072 signing key",
             cancellationToken);
     }
@@ -137,14 +130,10 @@ public sealed class OpenBaoTransitAdminClient(
     public async Task RotateKeyAsync(
         CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             $"{KeyPath}/rotate",
             new { },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            response,
             "rotate the Transit signing key",
             cancellationToken);
     }
@@ -163,14 +152,10 @@ public sealed class OpenBaoTransitAdminClient(
             }
             """;
 
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/sys/policies/acl/{Escape(_options.RuntimePolicyName)}",
             new { policy },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            response,
             "create the runtime JWT signing policy",
             cancellationToken);
     }
@@ -178,7 +163,7 @@ public sealed class OpenBaoTransitAdminClient(
     public async Task<string> CreateRuntimeTokenAsync(
         CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             ProvisionedTokenCreationPath,
             new
@@ -192,10 +177,6 @@ public sealed class OpenBaoTransitAdminClient(
                 ttl = "8760h",
                 display_name = "generated-api-jwt-signer"
             },
-            cancellationToken);
-
-        await EnsureSuccessAsync(
-            response,
             "create the runtime API token",
             cancellationToken);
 
@@ -222,13 +203,10 @@ public sealed class OpenBaoTransitAdminClient(
             }
             """;
 
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/sys/policies/acl/{Escape(_options.MigratorPolicyName)}",
             new { policy },
-            cancellationToken);
-        await EnsureSuccessAsync(
-            response,
             "create the migration-only policy",
             cancellationToken);
     }
@@ -369,7 +347,7 @@ public sealed class OpenBaoTransitAdminClient(
     public async Task<string> CreateMigratorTokenAsync(
         CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             ProvisionedTokenCreationPath,
             new
@@ -381,8 +359,8 @@ public sealed class OpenBaoTransitAdminClient(
                 explicit_max_ttl = "2160h",
                 display_name = "generated-operations-database-migrator"
             },
+            "create the migration-only token",
             cancellationToken);
-        await EnsureSuccessAsync(response, "create the migration-only token", cancellationToken);
         using var document = await ReadJsonAsync(response, cancellationToken);
         return RequiredString(
             RequiredProperty(document.RootElement, "auth"),
@@ -433,14 +411,14 @@ public sealed class OpenBaoTransitAdminClient(
         string policy,
         CancellationToken cancellationToken)
     {
-        using var policyResponse = await SendAsync(
+        using var policyResponse = await SendAdminAsync(
             HttpMethod.Post,
             $"v1/sys/policies/acl/{Escape(policyName)}",
             new { policy },
+            $"create policy '{policyName}'",
             cancellationToken);
-        await EnsureSuccessAsync(policyResponse, $"create policy '{policyName}'", cancellationToken);
 
-        using var tokenResponse = await SendAsync(
+        using var tokenResponse = await SendAdminAsync(
             HttpMethod.Post,
             ProvisionedTokenCreationPath,
             new
@@ -452,8 +430,8 @@ public sealed class OpenBaoTransitAdminClient(
                 explicit_max_ttl = "2160h",
                 display_name = displayName
             },
+            $"create token for policy '{policyName}'",
             cancellationToken);
-        await EnsureSuccessAsync(tokenResponse, $"create token for policy '{policyName}'", cancellationToken);
         using var document = await ReadJsonAsync(tokenResponse, cancellationToken);
         return RequiredString(RequiredProperty(document.RootElement, "auth"), "client_token");
     }
@@ -461,12 +439,12 @@ public sealed class OpenBaoTransitAdminClient(
     public async Task RevokeBootstrapTokenAsync(
         CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(
+        using var response = await SendAdminAsync(
             HttpMethod.Post,
             "v1/auth/token/revoke-self",
             new { },
+            "revoke the current bootstrap or provisioning token",
             cancellationToken);
-        await EnsureSuccessAsync(response, "revoke the bootstrap root token", cancellationToken);
     }
 
     private string KeyPath => string.Join(
@@ -609,6 +587,44 @@ public sealed class OpenBaoTransitAdminClient(
                 "The OpenBao bootstrap request could not be completed.",
                 exception);
         }
+    }
+
+    private async Task<HttpResponseMessage> SendAdminAsync(
+        HttpMethod method,
+        string path,
+        object? body,
+        string operation,
+        CancellationToken cancellationToken,
+        bool allowNotFound = false)
+    {
+        return await OpenBaoAdminRetry.ExecuteAsync(
+            async retryCancellationToken =>
+            {
+                var response = await SendAsync(
+                    method,
+                    path,
+                    body,
+                    retryCancellationToken);
+                try
+                {
+                    if (!allowNotFound
+                        || response.StatusCode != HttpStatusCode.NotFound)
+                    {
+                        await EnsureSuccessAsync(
+                            response,
+                            operation,
+                            retryCancellationToken);
+                    }
+                    return response;
+                }
+                catch
+                {
+                    response.Dispose();
+                    throw;
+                }
+            },
+            $"{operation} while Raft leadership settles",
+            cancellationToken);
     }
 
     private static async Task EnsureSuccessAsync(

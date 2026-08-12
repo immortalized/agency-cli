@@ -1,0 +1,12 @@
+services:
+  api:
+    build: !reset null
+    pull_policy: never
+
+  frontend:
+    build: !reset null
+    pull_policy: never
+
+  operations:
+    build: !reset null
+    pull_policy: never

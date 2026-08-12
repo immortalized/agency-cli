@@ -18,6 +18,12 @@ program=$(basename -- "$0")
 DEV_FILES="-f compose.yaml -f compose.override.yaml"
 PRODUCTION_FILES="-f compose.production.yaml -f compose.production.seal.yaml"
 BOOTSTRAP_FILES="$PRODUCTION_FILES -f compose.production.bootstrap.yaml"
+IMAGES_ONLY_OVERLAY="-f compose.production.images.yaml"
+IMAGES_ONLY_MARKER=.images-only
+
+API_IMAGE=__PROJECT_SLUG__-production-api:latest
+FRONTEND_IMAGE=__PROJECT_SLUG__-production-frontend:latest
+OPERATIONS_IMAGE=__PROJECT_SLUG__-production-operations:latest
 
 BOOTSTRAP_SECRET_VARIABLE=PRODUCTION_DATABASE_BOOTSTRAP_SECRET_FILE
 
@@ -29,6 +35,24 @@ fail() {
 require_docker() {
     command -v docker >/dev/null 2>&1 ||
         fail "docker is not installed or not on PATH."
+}
+
+build_contexts_available() {
+    [ ! -e "$IMAGES_ONLY_MARKER" ] &&
+        [ -f backend/Dockerfile ] &&
+        [ -f backend/Operations.Dockerfile ] &&
+        [ -f frontend/Dockerfile ]
+}
+
+production_files_for_host() {
+    files=$1
+    if build_contexts_available; then
+        echo "$files"
+    else
+        [ -f compose.production.images.yaml ] ||
+            fail "source build contexts are unavailable and compose.production.images.yaml is missing."
+        echo "$files $IMAGES_ONLY_OVERLAY"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -74,6 +98,11 @@ Production (production):
   ./$program production database migrate      Apply EF migrations with the migrator identity.
   ./$program production database verify        Verify least-privilege runtime database access.
   ./$program production database rotate-runtime  Rotate the OpenBao-managed runtime credential.
+  ./$program production images export [archive]
+                                                Build api/frontend/operations and save one image archive.
+  ./$program production images load <archive> [platform]
+                                                Load/verify the archive and enable pre-built-image mode.
+  ./$program production images verify [platform] Verify the three exact production image tags/platforms.
 
 First-time production bootstrap only:
   ./$program production bootstrap-secret create   Generate the temporary bootstrap secret file.
@@ -88,6 +117,9 @@ First-time production bootstrap only:
 
 Setup:
   chmod +x ./$program     Once, after generating or cloning the project.
+
+Production automatically builds only when backend/frontend build contexts are
+present and '$IMAGES_ONLY_MARKER' is absent. 'images load' creates that marker.
 USAGE
 }
 
@@ -181,15 +213,90 @@ run_operations() {
     shift
     [ "$#" -gt 0 ] || fail "a subsystem command is required. Run './$program help'."
     require_docker
+    if build_contexts_available; then
+        # shellcheck disable=SC2086
+        exec docker compose $files --profile tools run --rm --build operations "$@"
+    fi
     # shellcheck disable=SC2086
-    exec docker compose $files --profile tools run --rm --build operations "$@"
+    exec docker compose $files --profile tools run --rm operations "$@"
 }
 
 build_operations() {
     files=$1
     require_docker
+    build_contexts_available ||
+        fail "source build contexts are unavailable or $IMAGES_ONLY_MARKER selects pre-built-image mode."
     # shellcheck disable=SC2086
     exec docker compose $files --profile tools build operations
+}
+
+require_target_platform() {
+    case "$1" in
+        linux/amd64 | linux/arm64) ;;
+        *) fail "target platform must be 'linux/amd64' or 'linux/arm64'." ;;
+    esac
+}
+
+verify_production_images() {
+    platform=${1:-linux/amd64}
+    require_target_platform "$platform"
+    require_docker
+
+    for image in "$API_IMAGE" "$FRONTEND_IMAGE" "$OPERATIONS_IMAGE"; do
+        actual=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image" 2>/dev/null) ||
+            fail "required image '$image' is not loaded."
+        [ "$actual" = "$platform" ] ||
+            fail "image '$image' targets '$actual', expected '$platform'."
+        echo "$image ($actual)"
+    done
+}
+
+export_production_images() {
+    platform=${DOCKER_DEFAULT_PLATFORM:-}
+    archive=${1:-__PROJECT_SLUG__-production-images.tar}
+    [ -n "$platform" ] ||
+        fail "DOCKER_DEFAULT_PLATFORM is not set. Run: export DOCKER_DEFAULT_PLATFORM=linux/amd64"
+    [ "$platform" = "linux/amd64" ] ||
+        fail "production image export requires DOCKER_DEFAULT_PLATFORM=linux/amd64; current value is '$platform'."
+    build_contexts_available ||
+        fail "image export requires backend/ and frontend/ source build contexts and no $IMAGES_ONLY_MARKER marker."
+    [ ! -e "$archive" ] ||
+        fail "image archive '$archive' already exists; choose a new path or remove it explicitly."
+    require_docker
+
+    docker build --tag "$API_IMAGE" backend
+    docker build --tag "$FRONTEND_IMAGE" frontend
+    docker build --tag "$OPERATIONS_IMAGE" \
+        --file backend/Operations.Dockerfile backend
+    verify_production_images "$platform"
+    docker image save --output "$archive" \
+        "$API_IMAGE" "$FRONTEND_IMAGE" "$OPERATIONS_IMAGE"
+    echo "Saved $API_IMAGE, $FRONTEND_IMAGE, and $OPERATIONS_IMAGE to $archive."
+}
+
+load_production_images() {
+    archive=${1:-}
+    platform=${2:-linux/amd64}
+    [ -n "$archive" ] || fail "an image archive path is required."
+    [ -r "$archive" ] || fail "image archive '$archive' is not readable."
+    require_target_platform "$platform"
+    require_docker
+
+    docker image load --input "$archive"
+    verify_production_images "$platform"
+    touch "$IMAGES_ONLY_MARKER"
+    echo "Pre-built-image mode enabled by $IMAGES_ONLY_MARKER."
+}
+
+production_images() {
+    verb=${1:-}
+    shift || true
+    case "$verb" in
+        export) export_production_images "$@" ;;
+        load) load_production_images "$@" ;;
+        verify) verify_production_images "$@" ;;
+        *) fail "expected 'export', 'load', or 'verify' after 'production images'." ;;
+    esac
 }
 
 dispatch() {
@@ -239,6 +346,11 @@ case "$environment" in
 
     production)
         case "${1:-}" in
+            images)
+                shift
+                production_images "$@"
+                ;;
+
             bootstrap-secret)
                 shift
                 case "${1:-}" in
@@ -255,11 +367,13 @@ case "$environment" in
                     fail "\$$BOOTSTRAP_SECRET_VARIABLE is not set. Run: eval \"\$(./$program production bootstrap-secret create)\""
                 [ -r "$configured" ] ||
                     fail "\$$BOOTSTRAP_SECRET_VARIABLE points at '$configured', which is not readable."
-                dispatch "$BOOTSTRAP_FILES" "production bootstrap" "$@"
+                files=$(production_files_for_host "$BOOTSTRAP_FILES")
+                dispatch "$files" "production bootstrap" "$@"
                 ;;
 
             *)
-                dispatch "$PRODUCTION_FILES" production "$@"
+                files=$(production_files_for_host "$PRODUCTION_FILES")
+                dispatch "$files" production "$@"
                 ;;
         esac
         ;;
