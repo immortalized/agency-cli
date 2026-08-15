@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using __PROJECT_NAMESPACE__.Application.Auth;
 using __PROJECT_NAMESPACE__.Application.Auth.Abstractions;
 using __PROJECT_NAMESPACE__.Application.Auth.Models;
 using Konscious.Security.Cryptography;
@@ -59,6 +60,7 @@ public sealed class Argon2PasswordHasher : IPasswordHasher
         string encodedHash)
     {
         if (string.IsNullOrEmpty(password) ||
+            password.Length < PasswordPolicy.MinimumLength ||
             string.IsNullOrWhiteSpace(encodedHash))
         {
             return PasswordVerificationResult.Failed;
@@ -287,10 +289,10 @@ public sealed class Argon2PasswordHasher : IPasswordHasher
     {
         ArgumentNullException.ThrowIfNull(password);
 
-        if (password.Length == 0)
+        if (password.Length < PasswordPolicy.MinimumLength)
         {
             throw new ArgumentException(
-                "Password cannot be empty.",
+                $"Password must contain at least {PasswordPolicy.MinimumLength} characters.",
                 nameof(password));
         }
 

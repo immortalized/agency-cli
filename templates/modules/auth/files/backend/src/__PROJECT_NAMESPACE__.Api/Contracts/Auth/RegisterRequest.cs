@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using __PROJECT_NAMESPACE__.Application.Auth;
 
 namespace __PROJECT_NAMESPACE__.Api.Contracts.Auth;
 
@@ -13,6 +14,6 @@ public sealed record RegisterRequest(
     string? Email,
 
     [param: Required]
-    [param: MinLength(1)]
+    [param: MinLength(PasswordPolicy.MinimumLength)]
     [param: MaxLength(1024)]
     string Password);

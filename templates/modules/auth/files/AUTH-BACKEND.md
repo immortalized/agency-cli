@@ -32,6 +32,9 @@ tokens can call only `GET /api/auth/me` and
 successful password change increments the user's auth version and revokes all
 refresh-token families, invalidating the old restricted credentials.
 
+Passwords must contain at least 8 characters. The same minimum is enforced for
+registration, login, current-password verification, and new password hashes.
+
 ## Routes
 
 | Route | Protection |
