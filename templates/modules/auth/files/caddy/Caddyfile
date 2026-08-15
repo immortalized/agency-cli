@@ -1,0 +1,7 @@
+{
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+}
+
+{$TLS_DOMAIN} {
+	reverse_proxy frontend:3000
+}

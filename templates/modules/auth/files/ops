@@ -10,16 +10,33 @@
 
 set -eu
 
-script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cd "$script_directory"
-
 program=$(basename -- "$0")
+
+resolve_symlink() {
+    target=$1
+    while [ -L "$target" ]; do
+        link=$(readlink "$target") || {
+            echo "$program: could not resolve symlink '$target'." >&2
+            exit 1
+        }
+        case "$link" in
+            /*) target=$link ;;
+            *) target="$(dirname -- "$target")/$link" ;;
+        esac
+    done
+    printf '%s\n' "$target"
+}
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$(resolve_symlink "$0")")" && pwd)
+cd "$script_directory"
 
 DEV_FILES="-f compose.yaml -f compose.override.yaml"
 PRODUCTION_FILES="-f compose.production.yaml -f compose.production.seal.yaml"
 BOOTSTRAP_FILES="$PRODUCTION_FILES -f compose.production.bootstrap.yaml"
 IMAGES_ONLY_OVERLAY="-f compose.production.images.yaml"
 IMAGES_ONLY_MARKER=.images-only
+TLS_OVERLAY="-f compose.production.tls.yaml"
+TLS_MARKER=.tls
 
 API_IMAGE=__PROJECT_SLUG__-production-api:latest
 FRONTEND_IMAGE=__PROJECT_SLUG__-production-frontend:latest
@@ -46,13 +63,19 @@ build_contexts_available() {
 
 production_files_for_host() {
     files=$1
-    if build_contexts_available; then
-        echo "$files"
-    else
+    if ! build_contexts_available; then
         [ -f compose.production.images.yaml ] ||
             fail "source build contexts are unavailable and compose.production.images.yaml is missing."
-        echo "$files $IMAGES_ONLY_OVERLAY"
+        files="$files $IMAGES_ONLY_OVERLAY"
     fi
+    if [ -e "$TLS_MARKER" ]; then
+        [ -f compose.production.tls.yaml ] ||
+            fail "$TLS_MARKER enables TLS but compose.production.tls.yaml is missing."
+        [ -f caddy/Caddyfile ] ||
+            fail "$TLS_MARKER enables TLS but caddy/Caddyfile is missing."
+        files="$files $TLS_OVERLAY"
+    fi
+    echo "$files"
 }
 
 # ---------------------------------------------------------------------------
@@ -103,6 +126,9 @@ Production (production):
   ./$program production images load <archive> [platform]
                                                 Load/verify the archive and enable pre-built-image mode.
   ./$program production images verify [platform] Verify the three exact production image tags/platforms.
+  ./$program production tls enable             Enable the automatic-HTTPS overlay.
+  ./$program production tls disable            Disable the automatic-HTTPS overlay.
+  ./$program production tls status             Report whether the automatic-HTTPS overlay is enabled.
 
 First-time production bootstrap only:
   ./$program production bootstrap-secret create   Generate the temporary bootstrap secret file.
@@ -120,6 +146,8 @@ Setup:
 
 Production automatically builds only when backend/frontend build contexts are
 present and '$IMAGES_ONLY_MARKER' is absent. 'images load' creates that marker.
+TLS is opt-in. 'production tls enable' creates '$TLS_MARKER'; every subsequent
+production command then adds compose.production.tls.yaml. Set TLS_DOMAIN first.
 USAGE
 }
 
@@ -299,6 +327,42 @@ production_images() {
     esac
 }
 
+production_tls() {
+    verb=${1:-}
+    case "$verb" in
+        enable)
+            [ "$#" -eq 1 ] || fail "'production tls enable' takes no arguments."
+            [ -n "${TLS_DOMAIN:-}" ] ||
+                fail "TLS_DOMAIN is not set. Export the public hostname before enabling TLS."
+            case "$TLS_DOMAIN" in
+                *[!A-Za-z0-9.-]* | -* | .* | *. | *..*)
+                    fail "TLS_DOMAIN must be one public DNS hostname without a scheme, port, path, or whitespace."
+                    ;;
+            esac
+            [ -f compose.production.tls.yaml ] ||
+                fail "compose.production.tls.yaml is missing."
+            [ -f caddy/Caddyfile ] ||
+                fail "caddy/Caddyfile is missing."
+            touch "$TLS_MARKER"
+            echo "Automatic HTTPS enabled for $TLS_DOMAIN via $TLS_MARKER."
+            ;;
+        disable)
+            [ "$#" -eq 1 ] || fail "'production tls disable' takes no arguments."
+            rm -f -- "$TLS_MARKER"
+            echo "Automatic HTTPS disabled. If Caddy was running, remove it with the TLS overlay before disabling next time."
+            ;;
+        status)
+            [ "$#" -eq 1 ] || fail "'production tls status' takes no arguments."
+            if [ -e "$TLS_MARKER" ]; then
+                echo "Automatic HTTPS is enabled ($TLS_MARKER exists)."
+            else
+                echo "Automatic HTTPS is disabled ($TLS_MARKER is absent)."
+            fi
+            ;;
+        *) fail "expected 'enable', 'disable', or 'status' after 'production tls'." ;;
+    esac
+}
+
 dispatch() {
     files=$1
     label=$2
@@ -346,6 +410,11 @@ case "$environment" in
 
     production)
         case "${1:-}" in
+            tls)
+                shift
+                production_tls "$@"
+                ;;
+
             images)
                 shift
                 production_images "$@"

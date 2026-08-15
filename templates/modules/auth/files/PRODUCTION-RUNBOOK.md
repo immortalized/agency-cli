@@ -45,6 +45,17 @@ absolute project path there because `$PWD` changes. Both `ops ...` and
 `./ops ...` remain valid; the rest of this runbook deliberately keeps `./ops`
 so every command works even when this optional step is skipped.
 
+Alternatively, install a symlink in a directory already on `PATH`:
+
+```sh
+sudo ln -s "$(pwd)/ops" /usr/local/bin/ops
+ops help
+```
+
+The script resolves relative, absolute, and chained symlinks before changing
+to the project directory, so its Compose files and build contexts are found
+regardless of the caller's current directory.
+
 `./ops help` lists every environment, subsystem, and command with a one-line
 description. The grammar is `./ops <environment> <subsystem> <verb> [args...]`,
 where `<environment>` is `dev` or `production`, and `compose` is a raw
@@ -100,7 +111,7 @@ intentionally absent:
 
 ```sh
 tar -czf production-deployment.tar.gz \
-  production-images.tar compose*.yaml openbao ops \
+  production-images.tar compose*.yaml caddy openbao ops \
   PRODUCTION-RUNBOOK.md PRODUCTION-UNSEAL.md
 scp production-deployment.tar.gz operator@production-host:/srv/__PROJECT_SLUG__/
 ```
@@ -169,6 +180,100 @@ moves to a secrets platform that actually enforces them.
 `eval` as above clears the variable too. Both `bootstrap-secret` commands stay
 available after bootstrap completes, because generating secret material for a
 different environment is not itself a bootstrap-provisioning action.
+
+## Enable automatic HTTPS with Caddy
+
+TLS is an opt-in production overlay. The base stack continues to publish
+frontend directly on host port 80. `./ops production tls enable` creates the
+local `.tls` marker; from then on every `./ops production ...` Compose or
+Operations invocation automatically adds `compose.production.tls.yaml` after
+the seal, bootstrap (when applicable), and pre-built-image overlays. The TLS
+overlay removes frontend's host port and public-network attachment, then makes
+Caddy the only service publishing host ports 80 and 443. Caddy reaches
+`frontend:3000` only over the internal `application` network. Frontend keeps
+proxying same-origin `/api` requests to `api:8080`, so no application URL or
+API routing change is required.
+
+Before enabling TLS, allow inbound TCP 80 and 443 in the host and cloud
+firewalls. UDP 443 is optional for HTTP/3 and is also published by the overlay.
+The hostname must resolve publicly to this VM, and no other host process may
+occupy ports 80 or 443. Caddy uses port 80 for ACME validation and automatic
+HTTP-to-HTTPS redirects. Its certificates, private keys, and ACME account state
+live in the named `production_caddy_data` volume; `production_caddy_config`
+also persists its autosaved configuration across container replacement.
+
+### No owned domain: derive an sslip.io hostname
+
+Replace the example with the VM's public IPv4 address. Converting dots to
+dashes produces a real public hostname that sslip.io resolves back to that IP,
+with no DNS account or domain purchase:
+
+```sh
+PUBLIC_IP=203.0.113.42 # replace with this VM's actual public IPv4 address
+export TLS_DOMAIN="$(printf '%s' "$PUBLIC_IP" | tr '.' '-').sslip.io"
+printf '%s\n' "$TLS_DOMAIN"
+# 203-0-113-42.sslip.io
+getent ahostsv4 "$TLS_DOMAIN"
+```
+
+`getent` must show the VM's public IP. If it is unavailable, use
+`dig +short "$TLS_DOMAIN"`. Do not continue with the documentation-only
+`203.0.113.42` address. For later operator sessions, create or edit the
+project-root `.env` file so it contains the resolved value, for example
+`TLS_DOMAIN=203-0-113-42.sslip.io`; Compose reads that file automatically.
+Keep the `export` in the current shell because `tls enable` validates it before
+creating the marker.
+
+### Owned domain
+
+Create an A record (and an AAAA record only if the VM really accepts IPv6
+traffic) pointing the desired hostname at the VM, wait until public DNS returns
+the correct address, then use the identical mechanism:
+
+```sh
+export TLS_DOMAIN=app.example.com
+getent ahostsv4 "$TLS_DOMAIN"
+```
+
+Persist the same `TLS_DOMAIN=app.example.com` line in the project-root `.env`
+for future sessions.
+
+### Switch an existing HTTP deployment to HTTPS
+
+Starting from a healthy, already-bootstrapped non-TLS deployment, keep
+`TLS_DOMAIN` exported as above and run:
+
+```sh
+./ops production compose down
+./ops production tls enable
+./ops production compose config
+./ops production compose up -d
+./ops production compose ps
+./ops production compose logs -f caddy
+# After Caddy reports that the certificate was obtained, press Ctrl-C.
+curl --fail --show-error --location "https://$TLS_DOMAIN/"
+```
+
+The `config` output should show no `ports` on frontend, ports 80/443 only on
+Caddy, frontend attached only to `application`, and Caddy attached to
+`application` plus `public`. Caddy waits for frontend's existing healthcheck;
+its own healthcheck queries the loopback-only admin endpoint. A successful
+browser or `curl` request confirms the full HTTPS-to-Caddy-to-frontend path and
+a publicly trusted certificate. Caddy's default automatic HTTPS policy also
+redirects `http://$TLS_DOMAIN` to HTTPS.
+
+TLS may instead be enabled before Fresh bootstrap. Keep `TLS_DOMAIN` exported,
+run `./ops production tls enable`, and then use the Fresh bootstrap commands
+unchanged. The targeted `database openbao` start and Operations runs do not
+start Caddy; the final `./ops production compose up -d` starts frontend and
+Caddy after bootstrap succeeds. Pre-built-image mode composes in the same way:
+the images overlay affects only api/frontend/operations, while Caddy pulls its
+separately pinned image.
+
+To return to direct HTTP, first run `./ops production compose down` while the
+marker still exists, then `./ops production tls disable`, and finally
+`./ops production compose up -d`. Removing the marker before `down` would hide
+Caddy from that Compose file set and leave its old container behind.
 
 ## The bootstrap overlay is refused after bootstrap completes
 
@@ -244,6 +349,19 @@ wrong passphrase fails authenticated decryption without changing the bundle or
 OpenBao. If a multi-operator quorum is unavailable, answer `N` before any share
 is submitted. API startup remains blocked on OpenBao's unsealed healthcheck.
 
+With TLS enabled, keep `TLS_DOMAIN` exported (or in the project-root `.env`)
+and replace the final command with:
+
+```sh
+./ops production compose up -d api frontend caddy
+./ops production compose ps
+curl --fail --show-error --location "https://$TLS_DOMAIN/"
+```
+
+The first `down` uses the active TLS overlay, but it does not remove named
+volumes, so the Caddy certificate/ACME state survives. The final start waits on
+the same API and frontend healthchecks before Caddy becomes healthy.
+
 ## Audit commands
 
 ```sh
@@ -252,11 +370,15 @@ docker inspect production-test-api-1
 find . -type f -name '*password*' -o -name '*unseal*'
 ```
 
-Confirm only frontend publishes a port; API, PostgreSQL, and OpenBao have no
-host ports; API mounts only `production_runtime_identity`; Operations alone
-mounts `production_operations_state`; no Docker socket is mounted; containers
-drop capabilities/use `no-new-privileges`; and production build contexts do
-not contain `.secrets` or OpenBao development scripts.
+Without TLS, confirm only frontend publishes a port. With TLS enabled, confirm
+only Caddy publishes ports and frontend has no host port. In both modes, API,
+PostgreSQL, and OpenBao have no host ports; API mounts only
+`production_runtime_identity`; Operations alone mounts
+`production_operations_state`; no Docker socket is mounted; containers drop
+capabilities/use `no-new-privileges`; and production build contexts do not
+contain `.secrets` or OpenBao development scripts. Caddy should have only the
+`NET_BIND_SERVICE` capability added, a read-only root filesystem, a hardened
+temporary filesystem, and named volumes mounted at `/data` and `/config`.
 
 Also verify API's runtime token receives HTTP 403 for the migrator credential,
 the host has no plaintext migrator password, migrations work through
